@@ -1,0 +1,26 @@
+src/utils/format-model-name.ts
+  a9641e98bafd8a20 17-72,96-105,107-112,121-124,131,135-160
+CHANGELOG.md
+  a9641e98bafd8a20 10-33,136-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "e2d6585bd3601ee8566c4ee7ff6ed1d868d13a77",
+  "prompts": {
+    "a9641e98bafd8a20": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_23099c794ffekKx5JG61KFv5nr",
+        "model": "litellm/gpt-5-4-medium"
+      },
+      "human_author": "Yusef Mohamadi",
+      "messages": [],
+      "total_additions": 273,
+      "total_deletions": 66,
+      "accepted_lines": 133,
+      "overriden_lines": 3,
+      "messages_url": "https://usegitai.com/cas/7a095c9b49b3a1ccfcb44c228a4d49b3d29bc42988abd79062df631fb2775a8b"
+    }
+  }
+}
