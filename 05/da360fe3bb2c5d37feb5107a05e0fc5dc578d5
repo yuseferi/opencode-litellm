@@ -1,0 +1,26 @@
+README.md
+  a9641e98bafd8a20 3-4,9-11
+assets/logo.svg
+  a9641e98bafd8a20 1-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "05da360fe3bb2c5d37feb5107a05e0fc5dc578d5",
+  "prompts": {
+    "a9641e98bafd8a20": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_23099c794ffekKx5JG61KFv5nr",
+        "model": "litellm/gpt-5-4-medium"
+      },
+      "human_author": "Yusef Mohamadi",
+      "messages": [],
+      "total_additions": 89,
+      "total_deletions": 23,
+      "accepted_lines": 66,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/2b04f0562c4b4d1e49686c6a3ae26d7078f895c6ba29b8f21a1c0bf88e20d412"
+    }
+  }
+}
