@@ -1,0 +1,28 @@
+package.json
+  db087bfb3d7b4898 3
+README.md
+  db087bfb3d7b4898 3-6,12-14,28,30,42,54
+src/plugin/index.ts
+  db087bfb3d7b4898 14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "143fc2de3255de2046fe0d490f18ae116203cba9",
+  "prompts": {
+    "db087bfb3d7b4898": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_2319d3641ffedT7C8CwCnRDV45",
+        "model": "lmstudio/claude-opus-4-7"
+      },
+      "human_author": "Yusef Mohamadi",
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 6,
+      "accepted_lines": 13,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/7d70dcc08e40565798af27c2bf5180cecea32bc3425c37ebfa2fd4fcde9852ff"
+    }
+  }
+}
