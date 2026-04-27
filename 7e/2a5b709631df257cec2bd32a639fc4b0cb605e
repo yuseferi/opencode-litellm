@@ -1,0 +1,24 @@
+README.md
+  610ce04a14453768 92,94,104-122,138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "7e2a5b709631df257cec2bd32a639fc4b0cb605e",
+  "prompts": {
+    "610ce04a14453768": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_22ed371caffesCFMycISRghKKT",
+        "model": "litellm/claude-opus-4-7"
+      },
+      "human_author": "Yusef Mohamadi",
+      "messages": [],
+      "total_additions": 22,
+      "total_deletions": 3,
+      "accepted_lines": 22,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/72cc0f32a117fc7b933cc4fcdc85e702751eb08ed67b7e7d0c66aa245c0ca4a3"
+    }
+  }
+}
