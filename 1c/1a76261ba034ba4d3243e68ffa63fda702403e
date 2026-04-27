@@ -1,0 +1,26 @@
+.github/workflows/ci.yml
+  db087bfb3d7b4898 1-30
+.github/workflows/release.yml
+  db087bfb3d7b4898 1-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "1c1a76261ba034ba4d3243e68ffa63fda702403e",
+  "prompts": {
+    "db087bfb3d7b4898": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_2319d3641ffedT7C8CwCnRDV45",
+        "model": "lmstudio/claude-opus-4-7"
+      },
+      "human_author": "Yusef Mohamadi",
+      "messages": [],
+      "total_additions": 63,
+      "total_deletions": 0,
+      "accepted_lines": 63,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/8087e72f6298c05adcbdfece8a820cbb6170bf9272cce20b3c9dc5aa318c2e81"
+    }
+  }
+}
