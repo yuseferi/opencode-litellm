@@ -1,0 +1,31 @@
+package.json
+  s_5c3e6697e3a211::t_b917bbb1a5b0c1 4
+.idea/modules.xml
+  ai_agent 1-8
+.idea/vcs.xml
+  ai_agent 1-6
+.idea/misc.xml
+  ai_agent 1-7
+.idea/opencode-litellm.iml
+  ai_agent 1-9
+.idea/.gitignore
+  ai_agent 1-10
+src/plugin/index.ts
+  s_5c3e6697e3a211::t_40659b8667df7f 19-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "3c07411f4a40b2836e7d8f60c5f5a1f827e1c3d7",
+  "prompts": {},
+  "sessions": {
+    "s_5c3e6697e3a211": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1ebeffef3ffeuwR2YwESQfUuFY",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
