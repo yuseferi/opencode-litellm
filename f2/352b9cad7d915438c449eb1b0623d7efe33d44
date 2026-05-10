@@ -1,0 +1,39 @@
+package.json
+  s_5c3e6697e3a211::t_eb1cdad555d1c5 4
+src/utils/litellm-api.ts
+  s_5c3e6697e3a211::t_827c1ff4c8e213 85,89
+  s_5c3e6697e3a211::t_07aff28f290e9f 63,68
+  s_5c3e6697e3a211::t_e619713549240b 42,47
+  s_5c3e6697e3a211::t_60abbb8b117d64 24,32-33
+CHANGELOG.md
+  s_5c3e6697e3a211::t_1eac0a7b22c5fb 206-207
+  s_5c3e6697e3a211::t_08984e40d70ed4 10-29
+src/plugin/discover.ts
+  s_5c3e6697e3a211::t_26634122501a6d 43-61,64,69,72,75,77
+  s_5c3e6697e3a211::t_65fe51d1dec4dd 135-136,143
+README.md
+  s_5c3e6697e3a211::t_f4df8f3584b4ff 200-222
+  s_5c3e6697e3a211::t_d0090a58ac14d5 313-335
+  s_5c3e6697e3a211::t_1643bace6aad68 74
+src/plugin/index.ts
+  s_5c3e6697e3a211::t_938ccd96a23c6e 111-113
+  s_5c3e6697e3a211::t_4126d583b482d0 1,7-23,58-60
+src/types/index.ts
+  s_5c3e6697e3a211::t_264105a17abc42 81-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "f2352b9cad7d915438c449eb1b0623d7efe33d44",
+  "prompts": {},
+  "sessions": {
+    "s_5c3e6697e3a211": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1ebeffef3ffeuwR2YwESQfUuFY",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
