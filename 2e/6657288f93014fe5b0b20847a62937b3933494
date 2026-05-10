@@ -1,0 +1,27 @@
+package.json
+  s_5c3e6697e3a211::t_94f13a95e3abe6 4
+src/plugin/index.ts
+  s_5c3e6697e3a211::t_7edfe8a29d6e76 1,12-18,40-42
+CHANGELOG.md
+  s_5c3e6697e3a211::t_53b8efc29543cb 10-24,28-30
+  s_5c3e6697e3a211::t_9af8dde83a608f 218-219
+README.md
+  s_5c3e6697e3a211::t_1178f85e095ec6 49-60,64-68
+  s_5c3e6697e3a211::t_d682cd46816633 96,98,100,103-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "2e6657288f93014fe5b0b20847a62937b3933494",
+  "prompts": {},
+  "sessions": {
+    "s_5c3e6697e3a211": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1ebeffef3ffeuwR2YwESQfUuFY",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
