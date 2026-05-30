@@ -127,6 +127,34 @@ You **do not need to list any models** — the plugin still discovers them from 
 
 That's the whole config — every model in your LiteLLM `model_list` will appear in the picker.
 
+### Example: governed upstream route with Tuning Engines
+
+If your team routes model traffic through Tuning Engines for policy, traces,
+approvals, and usage visibility, add it as an OpenAI-compatible upstream in
+your LiteLLM config. The plugin will discover the alias from LiteLLM just like
+any other `model_list` entry:
+
+```yaml
+model_list:
+  - model_name: te-gpt-5.4-mini
+    litellm_params:
+      model: openai/gpt-5.4-mini
+      api_key: os.environ/TUNING_ENGINES_API_KEY
+      api_base: https://api.tuningengines.com/v1
+```
+
+Then expose the key to LiteLLM and keep your OpenCode config pointed at the
+same LiteLLM proxy:
+
+```bash
+export TUNING_ENGINES_API_KEY=sk-te-...
+litellm --config config.yaml --port 4000
+opencode
+```
+
+OpenCode and this plugin still own model discovery and picker wiring. Tuning
+Engines sits on the upstream model route as the governed control plane.
+
 ### Overriding or curating individual models (optional)
 
 If you want to rename a model in the picker, pin its `organizationOwner`, or otherwise hand-curate metadata, add it under `models`. The plugin **preserves your entries verbatim** and only injects discovered models whose key isn't already defined:
