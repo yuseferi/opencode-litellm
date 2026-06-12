@@ -25,14 +25,16 @@ echo "[smoke] litellm url  : ${LITELLM_URL}"
 echo ""
 
 # ── Resolve plugin entry point ────────────────────────────────────────────────
-PLUGIN_ENTRY="$(node -e "console.log(require.resolve('/work/src/plugin/index.ts', { paths: ['/work'] }))" 2>/dev/null || true)"
-if [ -z "${PLUGIN_ENTRY}" ]; then
-  # Fall back to compiled output if TypeScript source isn't directly resolvable
-  PLUGIN_ENTRY="/work/src/plugin/index.ts"
-fi
+# Source is always at a known path — no resolution needed.
+PLUGIN_ENTRY="/work/src/plugin/index.ts"
 
 # ── Locate @opencode-ai/plugin SDK ───────────────────────────────────────────
-SDK_PATH="$(node -e "console.log(require.resolve('@opencode-ai/plugin', { paths: ['/work/node_modules', '/work'] }))" 2>/dev/null || echo "")"
+# The package uses an exports map; resolve via a script colocated in /work
+# so Node's module resolution walks up from there and finds node_modules.
+_RESOLVE_SCRIPT="/work/_smoke_resolve.mjs"
+printf 'console.log(new URL(await import.meta.resolve("@opencode-ai/plugin")).pathname)\n' > "${_RESOLVE_SCRIPT}"
+SDK_PATH="$(node --no-warnings "${_RESOLVE_SCRIPT}" 2>/dev/null || echo "")"
+rm -f "${_RESOLVE_SCRIPT}"
 if [ -z "${SDK_PATH}" ]; then
   echo "[smoke] ERROR: @opencode-ai/plugin not found in /work/node_modules"
   exit 1
@@ -68,33 +70,31 @@ cat > "${AUTH_DIR}/auth.json" <<EOF
 EOF
 
 # ── Write standalone hook-invocation script ───────────────────────────────────
-cat > "${SMOKE_DIR}/run-hooks.mjs" <<'SCRIPT'
+cat > "${SMOKE_DIR}/run-hooks.mts" <<'SCRIPT'
 import { readFileSync } from "fs"
 import { pathToFileURL } from "url"
 import process from "process"
+import type { Auth } from "@opencode-ai/sdk/v2"
 
 const SENTINEL = "sk-smoke-sentinel"
-const smokeDir = process.env.SMOKE_DIR
-const workDir  = process.env.WORK_DIR
-const authFile = `${smokeDir}/opencode-data/auth.json`
+const smokeDir = process.env.SMOKE_DIR!
+const workDir  = process.env.WORK_DIR!
 
-// Load auth.json so we can construct an Auth object
-const authJson = JSON.parse(readFileSync(authFile, "utf8"))
-const litellmAuth = authJson.providers?.litellm ?? null
+// Simulate stored auth: getAuth() returns the sentinel key
+const getAuth = async (): Promise<Auth> =>
+  ({ type: "api", key: SENTINEL } as Auth)
 
-const ctx = litellmAuth
-  ? { auth: { type: litellmAuth.type, key: litellmAuth.key } }
-  : {}
+// ctx passed to provider.models hook
+const ctx = { auth: { type: "api" as const, key: SENTINEL } }
 
-// Dynamically import the plugin (TypeScript via --experimental-strip-types)
-const pluginUrl = pathToFileURL(`${workDir}/src/plugin/index.ts`).href
-const pluginModule = await import(pluginUrl)
-const plugin = pluginModule.default ?? pluginModule
+// Load the plugin and invoke it (PluginInput can be empty for smoke)
+const pluginModule = await import(pathToFileURL(`${workDir}/src/plugin/index.ts`).href)
+const hooks = await pluginModule.LiteLLMPlugin({} as any)
 
 let passed = 0
 let failed = 0
 
-function assert(label, value) {
+function assert(label: string, value: unknown) {
   if (value) {
     console.log(`[smoke] PASS: ${label}`)
     passed++
@@ -105,57 +105,60 @@ function assert(label, value) {
 }
 
 // ── Hook 1: config ────────────────────────────────────────────────────────────
+// config modifies its argument in-place and returns void — check it doesn't throw.
 try {
-  const configHook = plugin?.hooks?.config
-  if (typeof configHook === "function") {
-    const result = await configHook({})
-    assert("1/3 config hook fires and returns an object", result && typeof result === "object")
-    console.log("[smoke] config result:", JSON.stringify(result, null, 2))
-  } else {
-    assert("1/3 config hook exists", false)
+  assert("1/3 config hook is a function", typeof hooks.config === "function")
+  if (typeof hooks.config === "function") {
+    const cfg: any = {}
+    await hooks.config(cfg)
+    // After calling with empty config and no reachable proxy, provider may be
+    // absent — that's fine. We just assert the hook didn't throw.
+    console.log("[smoke] config ran without throwing ✓")
   }
-} catch (e) {
+} catch (e: any) {
   console.error("[smoke] config hook threw:", e.message)
   failed++
 }
 
-// ── Hook 2: auth.loader ───────────────────────────────────────────────────────
+// ── Hook 2: auth.loader ────────────────────────────────────────────────────────
+// auth.loader receives a getAuth callback and should return { apiKey: SENTINEL }
 try {
-  const authLoader = plugin?.hooks?.auth?.loader
-  if (typeof authLoader === "function") {
-    const result = await authLoader({})
-    const keyMatch = result?.key === SENTINEL
-    assert("2/3 auth.loader fires and returns sentinel key", keyMatch)
-    console.log("[smoke] auth.loader result:", JSON.stringify(result, null, 2))
-  } else {
-    // auth.loader is optional (added in this PR) — skip gracefully
-    console.log("[smoke] INFO: auth.loader hook not present (expected before PR lands)")
-    passed++
+  const loader = hooks.auth?.loader
+  assert("2/3 auth.loader hook is present", typeof loader === "function")
+  if (typeof loader === "function") {
+    const result = await loader(getAuth, {} as any)
+    const keyMatch = (result as any)?.apiKey === SENTINEL
+    assert("2/3 auth.loader returns { apiKey: sentinel }", keyMatch)
+    console.log("[smoke] auth.loader result:", JSON.stringify(result))
   }
-} catch (e) {
-  console.error("[smoke] auth.loader hook threw:", e.message)
+} catch (e: any) {
+  console.error("[smoke] auth.loader threw:", e.message)
   failed++
 }
 
 // ── Hook 3: provider.models ───────────────────────────────────────────────────
+// provider.models receives (provider, ctx) — ctx.auth carries the sentinel key.
+// The proxy is unreachable in the container so discovery will return {}.
+// We assert: (a) hook exists, (b) it accepts ctx.auth without crashing.
 try {
-  const modelsHook = plugin?.hooks?.provider?.models
+  const modelsHook = hooks.provider?.models
+  assert("3/3 provider.models hook is present", typeof modelsHook === "function")
   if (typeof modelsHook === "function") {
-    const result = await modelsHook(ctx)
-    const hasSentinel = result && typeof result === "object" && Object.keys(result).length > 0
-    assert("3/3 provider.models fires and returns model map", hasSentinel)
-    if (ctx.auth) {
-      const keyMatch = ctx.auth.key === SENTINEL
-      assert("3/3 provider.models received sentinel key in ctx.auth", keyMatch)
+    // Minimal provider shape with a baseURL that won't resolve (port 1)
+    const fakeProvider = {
+      id: "litellm",
+      name: "LiteLLM",
+      options: { baseURL: "http://127.0.0.1:1/v1", apiKey: SENTINEL },
     }
-    console.log("[smoke] provider.models returned", Object.keys(result ?? {}).length, "models")
-  } else {
-    assert("3/3 provider.models hook exists", false)
+    const result = await modelsHook(fakeProvider as any, ctx)
+    // Result is {} because port 1 is unreachable — that's expected
+    assert("3/3 provider.models executed with ctx.auth (unreachable proxy → {} is ok)",
+      result !== undefined && typeof result === "object")
+    console.log("[smoke] provider.models returned", Object.keys(result ?? {}).length, "models (0 expected — no proxy)")
   }
-} catch (e) {
-  // Benign if server is unreachable (port 1) — model list may fail
-  console.log("[smoke] provider.models threw (may be expected — no real server):", e.message)
-  passed++ // treat unreachable-server as pass for hook-wiring purposes
+} catch (e: any) {
+  console.error("[smoke] provider.models threw unexpectedly:", e.message)
+  failed++
 }
 
 console.log("")
@@ -171,11 +174,8 @@ SMOKE_DIR="${SMOKE_DIR}" \
 WORK_DIR="/work" \
 OPENCODE_CONFIG_DIR="${SMOKE_DIR}" \
 OPENCODE_DATA_DIR="${SMOKE_DIR}/opencode-data" \
-  node \
-    --experimental-strip-types \
-    --experimental-vm-modules \
-    --no-warnings \
-    "${SMOKE_DIR}/run-hooks.mjs"
+  /work/node_modules/.bin/tsx \
+    "${SMOKE_DIR}/run-hooks.mts"
 
 STATUS=$?
 
