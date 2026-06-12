@@ -1,0 +1,84 @@
+name: opencode-litellm-dev
+
+# ── Tailscale auth ────────────────────────────────────────────────────────────
+# Uses a reusable ephemeral auth key (TS_AUTHKEY).
+#
+# Create one at: https://login.tailscale.com/admin/settings/keys
+#   - Type: Reusable
+#   - Expiry: your preferred duration (e.g. 90 days)
+#   - Ephemeral: ✓ checked  (node auto-removed from tailnet on container stop)
+#   - Pre-authorized: ✓ checked
+#
+# The ?ephemeral=true suffix below ensures the node is removed immediately
+# when the container stops, even if the key itself is still valid.
+# No ACL tag changes needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Tailscale network sidecar ─────────────────────────────────────────────
+  tailscale:
+    image: tailscale/tailscale:stable
+    hostname: opencode-litellm-test
+    environment:
+      # Append ?ephemeral=true so the node is auto-removed on container stop.
+      TS_AUTHKEY: "${TS_AUTHKEY:?set TS_AUTHKEY in .devcontainer/.env}?ephemeral=true"
+      TS_EXTRA_ARGS: "--accept-routes"
+      # TS_USERSPACE=true: Docker Desktop on Mac doesn't expose /dev/net/tun.
+      TS_USERSPACE: "true"
+      # No state persistence — ephemeral nodes register fresh on every start.
+      TS_STATE_DIR: /tmp/tailscale-state
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: "no"
+
+  # ── Base service (shell, smoke, tui all extend this) ──────────────────────
+  oc-base:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - tailscale
+    network_mode: "service:tailscale"
+    environment:
+      LITELLM_URL: ${LITELLM_URL:-http://100.121.176.43:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+    volumes:
+      - ../:/work
+      - opencode-state:/root/.local/share/opencode
+      - opencode-config:/root/.config/opencode
+    working_dir: /work
+    tty: true
+    stdin_open: true
+    profiles: ["_base"]  # never started directly
+
+  # ── Shell — interactive bash ───────────────────────────────────────────────
+  shell:
+    extends:
+      service: oc-base
+    profiles: ["shell"]
+    command: ["bash"]
+
+  # ── Smoke — headless hook assertions, exits 0 or non-zero ─────────────────
+  # Smoke tests exercise hook wiring only (no live proxy needed).
+  # SKIP_TS_WAIT=1 bypasses the 30 s Tailscale readiness poll.
+  smoke:
+    extends:
+      service: oc-base
+    profiles: ["smoke"]
+    tty: false
+    environment:
+      SKIP_TS_WAIT: "1"
+    command: ["smoke"]
+
+  # ── TUI — full interactive opencode ───────────────────────────────────────
+  tui:
+    extends:
+      service: oc-base
+    profiles: ["tui"]
+    command: ["opencode"]
+
+volumes:
+  opencode-state:
+  opencode-config:
