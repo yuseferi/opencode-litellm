@@ -258,16 +258,16 @@ sequenceDiagram
     Plugin->>Plugin: bucket each model by transport (chat vs responses)
     Plugin->>OC: merge chat-completions models into provider.litellm
     Plugin->>OC: merge responses models into provider.litellm-responses (lazy)
-    OC->>OC: render model picker with all discovered models
+    OC->>OC: render model picker with all eligible discovered chat models
 ```
 
 1. On OpenCode startup the `config` lifecycle hook fires.
 2. If `provider.litellm` exists, its `baseURL` is used. Otherwise common ports are probed.
 3. A health check (`GET /v1/models`) verifies the proxy is reachable and authorized.
-4. Models from the response are enriched with `/v1/model/info` metadata (`mode`, token limits, capability flags — `/v1/models` omits these for database-defined models) and converted into OpenCode model entries with `id`, formatted `name`, `organizationOwner`, and inferred `modalities`. Non-chat models (embedding / image / audio) are excluded from the picker.
+4. Models from the response are enriched with `/v1/model/info` metadata (`mode`, token limits, capability flags — `/v1/models` omits these for database-defined models) and converted into OpenCode model entries keyed by `id`, with formatted `name`, `organizationOwner`, and inferred `modalities`. Non-chat models (embedding / image / audio) are excluded from the picker.
 5. Each model is bucketed by transport — reasoning-tier models (`gpt-5*`, `o1`/`o3`/`o4*`, or anything with `mode === 'responses'`) go into the `litellm-responses` provider; everything else goes into `litellm`. Per-model overrides via `responsesApiModels` / `chatApiModels` win.
 6. Discovered models are merged on top of any user-defined ones — never overwriting them. A model is skipped if its key already exists under **either** provider.
-7. The whole flow is wrapped in a `Promise.race` against a 15 s timeout so a slow proxy never blocks boot.
+7. The whole flow is wrapped in a `Promise.race` against a 20 s timeout so a slow proxy never blocks boot.
 
 ## 📋 Requirements
 
