@@ -8,13 +8,14 @@ import {
 } from '../utils/litellm-api'
 import {
   formatModelName,
-  extractModelOwner,
   categorizeModel,
 } from '../utils/format-model-name'
 import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
 
 const CHAT_PROVIDER_ID = 'litellm'
-const DISCOVERY_TIMEOUT_MS = 15000
+// Covers the sequential 3 s health check plus the parallel 15 s
+// models/model-info fetch phase, with headroom.
+const DISCOVERY_TIMEOUT_MS = 20000
 
 /**
  * OpenCode invokes the `config` hook several times per run with a

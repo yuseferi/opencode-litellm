@@ -110,12 +110,20 @@ export async function discoverLiteLLMModelInfo(
   for (const entry of data.data ?? []) {
     if (!entry.model_info) continue
     // Some deployments set capability flags on the params block rather
-    // than inside model_info (e.g. `supports_vision: true` next to the
-    // upstream model string). Fill the gap so enrichment sees them.
+    // than inside model_info. Fill those gaps so enrichment sees them.
     const info: LiteLLMModelInfo = { ...entry.model_info }
-    const paramsVision = entry.litellm_params?.supports_vision
-    if (info.supports_vision == null && typeof paramsVision === 'boolean') {
-      info.supports_vision = paramsVision
+    const capabilityFlags = [
+      'supports_vision',
+      'supports_function_calling',
+      'supports_reasoning',
+      'supports_pdf_input',
+      'supports_audio_input',
+    ] as const
+    for (const flag of capabilityFlags) {
+      const paramsValue = entry.litellm_params?.[flag]
+      if (info[flag] == null && typeof paramsValue === 'boolean') {
+        info[flag] = paramsValue
+      }
     }
     // Index under every alias LiteLLM may use for this model — the
     // `/v1/models` id can match any of them depending on how the
