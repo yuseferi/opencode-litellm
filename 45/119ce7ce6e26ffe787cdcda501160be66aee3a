@@ -1,0 +1,25 @@
+package.json
+  s_83a1c8312304d5::t_b7c9f8c6ad0e32 37-40
+CONTRIBUTING.md
+  s_83a1c8312304d5::t_a97643f7a15941 57-66
+.github/workflows/release.yml
+  s_83a1c8312304d5::t_ce701862d949b2 5-6,10,13-14,16-17,19,22-23,36-41
+.releaserc.json
+  s_83a1c8312304d5::t_ed770712b82e89 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "45119ce7ce6e26ffe787cdcda501160be66aee3a",
+  "prompts": {},
+  "sessions": {
+    "s_83a1c8312304d5": {
+      "agent_id": {
+        "tool": "gemini",
+        "id": "f594e81a-b4b2-41c9-9760-5958268dbc2b",
+        "model": "gemini-3.5-flash"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
