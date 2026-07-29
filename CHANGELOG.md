@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Features
+
+* **cost:** read model costs from `/v1/model/info` (`input_cost_per_token`, `output_cost_per_token`, `cache_read_input_token_cost`, `cache_creation_input_token_cost`)
+
 # [0.7.0](https://github.com/yuseferi/opencode-litellm/compare/v0.6.0...v0.7.0) (2026-07-24)
 
 

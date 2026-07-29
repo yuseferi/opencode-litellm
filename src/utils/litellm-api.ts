@@ -125,6 +125,19 @@ export async function discoverLiteLLMModelInfo(
         info[flag] = paramsValue
       }
     }
+    // Fill cost fields
+    const costFields = [
+      'input_cost_per_token',
+      'output_cost_per_token',
+      'cache_read_input_token_cost',
+      'cache_creation_input_token_cost',
+    ] as const
+    for (const field of costFields) {
+      const paramsValue = entry.litellm_params?.[field]
+      if (info[field] == null && typeof paramsValue === 'number') {
+        info[field] = paramsValue
+      }
+    }
     // Index under every alias LiteLLM may use for this model — the
     // `/v1/models` id can match any of them depending on how the
     // deployment names its entries (alias vs upstream model string).

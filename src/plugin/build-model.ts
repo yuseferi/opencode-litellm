@@ -1,5 +1,5 @@
 import type { Model as ModelV2 } from '@opencode-ai/sdk/v2'
-import type { LiteLLMModel } from '../types'
+import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
 import {
   categorizeModel,
   formatModelName,
@@ -8,18 +8,14 @@ import {
 /**
  * Build an OpenCode V2 `Model` entry from a discovered LiteLLM model.
  *
- * The V2 schema requires a lot of fields we have no real data for
- * (`cost`, `limit`, `release_date`, …). We fill these with sensible
- * defaults — zero cost / zero limits / today's date — so the entry
- * type-checks and the picker renders something useful. Real values
- * can be added in a future release if LiteLLM exposes them via
- * `/v1/model/info`, which carries `max_tokens`, `input_cost_per_token`,
- * etc.
+ * Cost data is populated from `/v1/model/info` (`info` param).
+ * Falls back to zero when the endpoint is unreachable.
  */
 export function buildModelV2(
   providerID: string,
   api: { id: string; url: string; npm: string },
   model: LiteLLMModel,
+  info: LiteLLMModelInfo,
 ): ModelV2 {
   const type = categorizeModel(model)
   const isVision = !!model.supports_vision
@@ -53,9 +49,12 @@ export function buildModelV2(
       interleaved: false,
     },
     cost: {
-      input: 0,
-      output: 0,
-      cache: { read: 0, write: 0 },
+      input: info.input_cost_per_token ?? 0,
+      output: info.output_cost_per_token ?? 0,
+      cache: {
+        read: info.cache_read_input_token_cost ?? 0,
+        write: info.cache_creation_input_token_cost ?? 0,
+      },
     },
     limit: {
       context: model.max_input_tokens ?? 0,

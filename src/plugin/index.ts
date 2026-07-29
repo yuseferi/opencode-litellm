@@ -87,7 +87,7 @@ function enrichModel(model: LiteLLMModel, info: LiteLLMModelInfo): LiteLLMModel 
  * image, audio) — they can't be used as primary chat models and would
  * clutter the picker.
  */
-function toConfigModel(model: LiteLLMModel): Record<string, unknown> | null {
+function toConfigModel(model: LiteLLMModel, info: LiteLLMModelInfo): Record<string, unknown> | null {
   const type = categorizeModel(model)
   if (type === 'embedding' || type === 'image' || type === 'audio') {
     return null
@@ -100,6 +100,19 @@ function toConfigModel(model: LiteLLMModel): Record<string, unknown> | null {
       context: model.max_input_tokens ?? 0,
       output: model.max_output_tokens ?? 0,
     }
+  }
+  if (info.input_cost_per_token != null || info.output_cost_per_token != null) {
+    const cost: Record<string, unknown> = {
+      input: info.input_cost_per_token ?? 0,
+      output: info.output_cost_per_token ?? 0,
+    }
+    if (info.cache_read_input_token_cost != null) {
+      cost.cache_read = info.cache_read_input_token_cost
+    }
+    if (info.cache_creation_input_token_cost != null) {
+      cost.cache_write = info.cache_creation_input_token_cost
+    }
+    entry.cost = cost
   }
   if (model.supports_function_calling) {
     entry.tool_call = true
@@ -303,7 +316,7 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
             if (models[model.id]) continue
             const info = infoByName?.get(model.id)
             if (infoByName && !info) unmatched.push(model.id)
-            const entry = toConfigModel(info ? enrichModel(model, info) : model)
+            const entry = toConfigModel(info ? enrichModel(model, info) : model, info ?? {})
             if (!entry) {
               skipped++
               continue

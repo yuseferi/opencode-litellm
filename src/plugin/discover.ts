@@ -2,11 +2,12 @@ import type { Model as ModelV2, Provider as ProviderV2 } from '@opencode-ai/sdk/
 import {
   autoDetectLiteLLM,
   checkLiteLLMHealth,
+  discoverLiteLLMModelInfo,
   discoverLiteLLMModels,
   normalizeBaseURL,
 } from '../utils/litellm-api'
 import { requiresResponsesAPI } from '../utils/format-model-name'
-import type { LiteLLMModel, Transport, TransportPolicy } from '../types'
+import type { LiteLLMModel, LiteLLMModelInfo, Transport, TransportPolicy } from '../types'
 import { buildModelV2 } from './build-model'
 
 const DISCOVERY_TIMEOUT_MS = 5000
@@ -138,15 +139,28 @@ export async function discoverBucket(
       return
     }
 
-    let models: LiteLLMModel[]
-    try {
-      models = await discoverLiteLLMModels(baseURL, apiKey, customHeaders)
-    } catch (error) {
+    const [modelsResult, infoResult] = await Promise.allSettled([
+      discoverLiteLLMModels(baseURL, apiKey, customHeaders),
+      discoverLiteLLMModelInfo(baseURL, apiKey, customHeaders),
+    ])
+
+    if (modelsResult.status === 'rejected') {
       console.warn(
         '[opencode-litellm] Model discovery failed:',
-        error instanceof Error ? error.message : String(error),
+        modelsResult.reason instanceof Error ? modelsResult.reason.message : String(modelsResult.reason),
       )
       return
+    }
+    const models = modelsResult.value
+
+    let infoByName: Map<string, LiteLLMModelInfo> | null = null
+    if (infoResult.status === 'fulfilled') {
+      infoByName = infoResult.value
+    } else {
+      console.warn(
+        '[opencode-litellm] /v1/model/info unavailable; model costs will be zero:',
+        infoResult.reason instanceof Error ? infoResult.reason.message : String(infoResult.reason),
+      )
     }
 
     if (models.length === 0) {
@@ -176,7 +190,8 @@ export async function discoverBucket(
       // it with "team not allowed"). Set `api.id` per-model so each
       // entry carries the correct upstream model name.
       const perModelApi = { ...resolvedApi, id: model.id }
-      out[model.id] = buildModelV2(resolvedApi.id, perModelApi, model)
+      const info = infoByName?.get(model.id) ?? {}
+      out[model.id] = buildModelV2(resolvedApi.id, perModelApi, model, info)
     }
   }
 

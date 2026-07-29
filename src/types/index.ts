@@ -58,6 +58,14 @@ export interface LiteLLMModelInfo {
   supports_reasoning?: boolean
   supports_pdf_input?: boolean
   supports_audio_input?: boolean
+  /**
+   * Cost per token (in USD). Populated from `/v1/model/info`; defaults
+   * to 0 if the endpoint is unreachable or the field is absent.
+   */
+  input_cost_per_token?: number
+  output_cost_per_token?: number
+  cache_read_input_token_cost?: number
+  cache_creation_input_token_cost?: number
 }
 
 /** A single entry returned by LiteLLM's `/v1/model/info` endpoint. */
