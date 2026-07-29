@@ -134,7 +134,11 @@ export async function discoverLiteLLMModelInfo(
     ] as const
     for (const field of costFields) {
       const paramsValue = entry.litellm_params?.[field]
-      if (info[field] == null && typeof paramsValue === 'number') {
+      // LiteLLM's ModelInfo defaults cost fields to 0.0 (not null) when the
+      // model is not in its pricing map. A zero in model_info therefore does
+      // not mean "free" — it means "unknown". If litellm_params carries an
+      // explicit non-zero value (set by the user in config.yaml), prefer it.
+      if ((info[field] == null || info[field] === 0) && typeof paramsValue === 'number' && paramsValue > 0) {
         info[field] = paramsValue
       }
     }

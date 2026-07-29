@@ -49,11 +49,13 @@ export function buildModelV2(
       interleaved: false,
     },
     cost: {
-      input: info.input_cost_per_token ?? 0,
-      output: info.output_cost_per_token ?? 0,
+      // OpenCode uses dollars per million tokens ($/M tokens);
+      // LiteLLM returns dollars per token. Multiply by 1e6.
+      input: (info.input_cost_per_token ?? 0) * 1_000_000,
+      output: (info.output_cost_per_token ?? 0) * 1_000_000,
       cache: {
-        read: info.cache_read_input_token_cost ?? 0,
-        write: info.cache_creation_input_token_cost ?? 0,
+        read: (info.cache_read_input_token_cost ?? 0) * 1_000_000,
+        write: (info.cache_creation_input_token_cost ?? 0) * 1_000_000,
       },
     },
     limit: {

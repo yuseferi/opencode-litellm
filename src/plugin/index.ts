@@ -102,15 +102,17 @@ function toConfigModel(model: LiteLLMModel, info: LiteLLMModelInfo): Record<stri
     }
   }
   if (info.input_cost_per_token != null || info.output_cost_per_token != null) {
+    // OpenCode's cost schema uses dollars per million tokens ($/M tokens),
+    // while LiteLLM's model_info returns dollars per token. Multiply by 1e6.
     const cost: Record<string, unknown> = {
-      input: info.input_cost_per_token ?? 0,
-      output: info.output_cost_per_token ?? 0,
+      input: (info.input_cost_per_token ?? 0) * 1_000_000,
+      output: (info.output_cost_per_token ?? 0) * 1_000_000,
     }
     if (info.cache_read_input_token_cost != null) {
-      cost.cache_read = info.cache_read_input_token_cost
+      cost.cache_read = info.cache_read_input_token_cost * 1_000_000
     }
     if (info.cache_creation_input_token_cost != null) {
-      cost.cache_write = info.cache_creation_input_token_cost
+      cost.cache_write = info.cache_creation_input_token_cost * 1_000_000
     }
     entry.cost = cost
   }
