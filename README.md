@@ -193,6 +193,13 @@ detects reasoning-tier models from their id (`gpt-5*`, `o1*`, `o3*`,
 `o4*`) and from LiteLLM's `mode === 'responses'` field, and creates the
 sibling provider lazily.
 
+If LiteLLM reports per-model reasoning-effort support (e.g.
+`supports_low_reasoning_effort`, `supports_medium_reasoning_effort`,
+`supports_high_reasoning_effort` in `model_info`), the plugin automatically
+surfaces those as OpenCode variants under the discovered model. Each variant
+sets `reasoningEffort` to the reported level, so you can switch between
+effort levels from the model picker without hand-curating every entry.
+
 To override the routing per model:
 
 ```jsonc

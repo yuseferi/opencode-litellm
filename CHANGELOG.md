@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Features
+
+* **plugin:** surface reasoning-effort variants from `/v1/model/info` reported by LiteLLM
+
 ### Fixed
 - **Embedding / image / audio models no longer appear in the OpenCode
   model picker.** The non-chat filter in `toConfigModel()` was a dead

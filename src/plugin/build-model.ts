@@ -1,5 +1,5 @@
 import type { Model as ModelV2 } from '@opencode-ai/sdk/v2'
-import type { LiteLLMModel } from '../types'
+import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
 import {
   categorizeModel,
   formatModelName,
@@ -20,6 +20,7 @@ export function buildModelV2(
   providerID: string,
   api: { id: string; url: string; npm: string },
   model: LiteLLMModel,
+  info?: LiteLLMModelInfo,
 ): ModelV2 {
   const type = categorizeModel(model)
   const isVision = !!model.supports_vision
@@ -66,5 +67,13 @@ export function buildModelV2(
     options: {},
     headers: {},
     release_date: '',
+    variants: info?.supports_reasoning_efforts?.length
+      ? Object.fromEntries(
+          info.supports_reasoning_efforts.map((effort) => [
+            effort,
+            { reasoningEffort: effort },
+          ]),
+        )
+      : undefined,
   }
 }
