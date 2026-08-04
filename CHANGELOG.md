@@ -1,3 +1,10 @@
+## [0.7.1](https://github.com/yuseferi/opencode-litellm/compare/v0.7.0...v0.7.1) (2026-08-04)
+
+
+### Bug Fixes
+
+* **plugin:** map real pricing from /v1/model/info into cost field ([#16](https://github.com/yuseferi/opencode-litellm/issues/16)) ([907b496](https://github.com/yuseferi/opencode-litellm/commit/907b496a1547e3ecf842feaa0570da660e4a5f90))
+
 # [0.7.0](https://github.com/yuseferi/opencode-litellm/compare/v0.6.0...v0.7.0) (2026-07-24)
 
 
