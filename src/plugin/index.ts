@@ -77,8 +77,18 @@ function enrichModel(model: LiteLLMModel, info: LiteLLMModelInfo): LiteLLMModel 
     supports_reasoning: model.supports_reasoning ?? info.supports_reasoning,
     supports_pdf_input: model.supports_pdf_input ?? info.supports_pdf_input,
     supports_audio_input: model.supports_audio_input ?? info.supports_audio_input,
+    input_cost_per_token: model.input_cost_per_token ?? info.input_cost_per_token,
+    output_cost_per_token: model.output_cost_per_token ?? info.output_cost_per_token,
   }
 }
+
+/**
+ * OpenCode's `cost` config field is USD per **million** tokens (the
+ * models.dev convention); LiteLLM's `/v1/model/info` reports USD per
+ * single token. `1e6` bridges the two — verified against a live
+ * `x-litellm-response-cost` header, not just the unit names.
+ */
+const USD_PER_TOKEN_TO_PER_MILLION = 1_000_000
 
 /**
  * Convert a discovered LiteLLM model into an OpenCode config-level
@@ -109,6 +119,16 @@ function toConfigModel(model: LiteLLMModel): Record<string, unknown> | null {
   }
   if (model.supports_vision) {
     entry.attachment = true
+  }
+  // Only emit `cost` when LiteLLM actually reported a price. Omitting
+  // it (rather than defaulting to 0) lets OpenCode/models.dev fall back
+  // to their own default instead of us asserting "this model is free"
+  // for something LiteLLM simply has no price anchor for (e.g. rerank).
+  if (model.input_cost_per_token != null || model.output_cost_per_token != null) {
+    entry.cost = {
+      input: (model.input_cost_per_token ?? 0) * USD_PER_TOKEN_TO_PER_MILLION,
+      output: (model.output_cost_per_token ?? 0) * USD_PER_TOKEN_TO_PER_MILLION,
+    }
   }
   const input: Array<'text' | 'image' | 'pdf' | 'audio'> = ['text']
   if (model.supports_vision) input.push('image')

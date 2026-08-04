@@ -32,6 +32,14 @@ export interface LiteLLMModel {
   supports_reasoning?: boolean
   supports_pdf_input?: boolean
   supports_audio_input?: boolean
+  /**
+   * USD price per input/output token, reliably available via
+   * `/v1/model/info` (`/v1/models` omits pricing). Absent for models
+   * LiteLLM has no price anchor for (e.g. rerank) — treat as "unknown",
+   * not "free".
+   */
+  input_cost_per_token?: number
+  output_cost_per_token?: number
 }
 
 export interface LiteLLMModelsResponse {
@@ -58,6 +66,8 @@ export interface LiteLLMModelInfo {
   supports_reasoning?: boolean
   supports_pdf_input?: boolean
   supports_audio_input?: boolean
+  input_cost_per_token?: number
+  output_cost_per_token?: number
 }
 
 /** A single entry returned by LiteLLM's `/v1/model/info` endpoint. */
