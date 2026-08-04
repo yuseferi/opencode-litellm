@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Features
+
+* **plugin:** surface reasoning-effort variants from `/v1/model/info` reported by LiteLLM
+
 ### Fixed
 - **Discovered models now carry real pricing instead of always showing
   `$0.00`.** `toConfigModel()` never read `input_cost_per_token` /

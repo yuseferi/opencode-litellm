@@ -97,7 +97,10 @@ const USD_PER_TOKEN_TO_PER_MILLION = 1_000_000
  * image, audio) — they can't be used as primary chat models and would
  * clutter the picker.
  */
-function toConfigModel(model: LiteLLMModel): Record<string, unknown> | null {
+function toConfigModel(
+  model: LiteLLMModel,
+  info?: LiteLLMModelInfo,
+): Record<string, unknown> | null {
   const type = categorizeModel(model)
   if (type === 'embedding' || type === 'image' || type === 'audio') {
     return null
@@ -137,6 +140,14 @@ function toConfigModel(model: LiteLLMModel): Record<string, unknown> | null {
   if (input.length > 1) {
     entry.modalities = { input, output: ['text'] }
   }
+  entry.variants = info?.supports_reasoning_efforts?.length
+    ? Object.fromEntries(
+        info.supports_reasoning_efforts.map((effort) => [
+          effort,
+          { reasoningEffort: effort },
+        ]),
+      )
+    : undefined
   return entry
 }
 
@@ -323,7 +334,10 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
             if (models[model.id]) continue
             const info = infoByName?.get(model.id)
             if (infoByName && !info) unmatched.push(model.id)
-            const entry = toConfigModel(info ? enrichModel(model, info) : model)
+            const entry = toConfigModel(
+              info ? enrichModel(model, info) : model,
+              info,
+            )
             if (!entry) {
               skipped++
               continue

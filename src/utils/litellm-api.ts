@@ -125,6 +125,25 @@ export async function discoverLiteLLMModelInfo(
         info[flag] = paramsValue
       }
     }
+
+    // Add supports reasoning efforts if present in litellm_params
+    const reasoningEffortPattern = /^supports_([a-z]+)_reasoning_effort$/
+    const efforts = new Set<string>()
+    for (const source of [info, entry.litellm_params]) {
+      if (!source || typeof source !== 'object') continue
+      for (const [key, value] of Object.entries(source)) {
+        const match = key.match(reasoningEffortPattern)
+        if (match && value === true) {
+          efforts.add(match[1])
+        }
+      }
+    }
+    if (efforts.size > 0) {
+      info.supports_reasoning_efforts = [
+        ...new Set([...(info.supports_reasoning_efforts ?? []), ...efforts]),
+      ]
+    }
+
     // Index under every alias LiteLLM may use for this model — the
     // `/v1/models` id can match any of them depending on how the
     // deployment names its entries (alias vs upstream model string).
