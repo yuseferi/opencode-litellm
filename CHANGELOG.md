@@ -1,3 +1,10 @@
+# [0.8.0](https://github.com/yuseferi/opencode-litellm/compare/v0.7.1...v0.8.0) (2026-08-04)
+
+
+### Features
+
+* **plugin:** surface reasoning-effort variants from /v1/model/info reported by LiteLLM ([#14](https://github.com/yuseferi/opencode-litellm/issues/14)) ([34db713](https://github.com/yuseferi/opencode-litellm/commit/34db71371f41a6211ca9c2392b297c420c25e1cb))
+
 ## [0.7.1](https://github.com/yuseferi/opencode-litellm/compare/v0.7.0...v0.7.1) (2026-08-04)
 
 
