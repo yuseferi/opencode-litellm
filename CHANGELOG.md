@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Discovered models now carry real pricing instead of always showing
+  `$0.00`.** `toConfigModel()` never read `input_cost_per_token` /
+  `output_cost_per_token` from `/v1/model/info`, so every model —
+  including ones LiteLLM has genuine pricing for — landed in
+  `opencode.json` without a `cost` field, and OpenCode's own default
+  (`0`) made every call look free regardless of actual spend. The
+  plugin now maps those fields into OpenCode's `cost` block (USD per
+  token → USD per million tokens, OpenCode's convention), verified live
+  against `x-litellm-response-cost` on a real completion. Models
+  LiteLLM has no price anchor for (e.g. rerank) are left without a
+  `cost` field, same as before — this fix reports real prices, it
+  doesn't invent ones.
 - **Embedding / image / audio models no longer appear in the OpenCode
   model picker.** The non-chat filter in `toConfigModel()` was a dead
   code path that returned the model entry either way, so models like
