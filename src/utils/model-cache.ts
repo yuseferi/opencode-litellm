@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -101,7 +101,22 @@ export function writeModelCache(
       savedAt: Date.now(),
       models,
     }
-    writeFileSync(cacheFile(baseURL), JSON.stringify(payload), 'utf8')
+    // Write to a temp file and rename so concurrent OpenCode processes
+    // never observe a partially-written JSON file (rename is atomic on
+    // the same filesystem).
+    const target = cacheFile(baseURL)
+    const tmp = `${target}.${process.pid}.tmp`
+    try {
+      writeFileSync(tmp, JSON.stringify(payload), 'utf8')
+      renameSync(tmp, target)
+    } catch (err) {
+      try {
+        rmSync(tmp, { force: true })
+      } catch {
+        // Ignore cleanup failure.
+      }
+      throw err
+    }
   } catch {
     // Ignore — the cache is an optimization, not a requirement.
   }
