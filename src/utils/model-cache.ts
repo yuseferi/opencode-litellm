@@ -23,9 +23,9 @@ interface ModelCacheFile {
  * directory is somehow unavailable.
  */
 function cacheDir(): string {
+  const home = homedir()
   const base =
-    process.env.XDG_CACHE_HOME ||
-    (homedir() ? join(homedir(), '.cache') : tmpdir())
+    process.env.XDG_CACHE_HOME || (home ? join(home, '.cache') : tmpdir())
   return join(base, 'opencode-litellm')
 }
 
