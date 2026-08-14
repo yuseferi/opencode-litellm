@@ -42,6 +42,22 @@ const refreshContexts = new Map<string, RefreshContext>()
 const refreshInFlight = new Set<string>()
 
 /**
+ * Race a promise against a timeout, resolving to `null` if the timeout
+ * wins. Clears the timer either way so a resolved discovery can't keep
+ * a short-lived process alive waiting on a pending `setTimeout`.
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+/**
  * Helper to determine if a provider ID or its configured options indicate
  * compatibility with LiteLLM.
  */
@@ -299,12 +315,10 @@ async function backgroundRefresh(baseURL: string): Promise<void> {
   if (!ctx) return
   refreshInFlight.add(baseURL)
   try {
-    const built = await Promise.race([
+    const built = await withTimeout(
       discoverModels(baseURL, ctx.apiKey, ctx.customHeaders, ctx.providerId),
-      new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), DISCOVERY_TIMEOUT_MS),
-      ),
-    ])
+      DISCOVERY_TIMEOUT_MS,
+    )
     if (built && Object.keys(built).length > 0) {
       writeModelCache(baseURL, built)
       console.log(
@@ -462,12 +476,10 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
         // Cold cache: do a live fetch (slow first run only), inject, and
         // persist for subsequent startups. Capped by a timeout so a slow
         // proxy never blocks boot.
-        const built = await Promise.race([
+        const built = await withTimeout(
           discoverModels(baseURL, apiKey, customHeaders, providerId),
-          new Promise<null>((resolve) =>
-            setTimeout(() => resolve(null), DISCOVERY_TIMEOUT_MS),
-          ),
-        ])
+          DISCOVERY_TIMEOUT_MS,
+        )
         if (built && Object.keys(built).length > 0) {
           mergeModels(models, built)
           injectedModelIds.set(baseURL, new Set(Object.keys(models)))
