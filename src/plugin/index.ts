@@ -287,20 +287,20 @@ async function discoverModels(
 /**
  * Merge freshly built model entries into a provider's `models` map
  * without clobbering user-curated (or previously injected) entries.
- * Returns the number of newly added ids.
+ * Returns the ids actually added by this call.
  */
 function mergeModels(
   models: Record<string, unknown>,
   built: Record<string, unknown>,
-): number {
-  let added = 0
+): string[] {
+  const added: string[] = []
   for (const [id, entry] of Object.entries(built)) {
-    if (models[id]) continue
+    if (Object.hasOwn(models, id)) continue
     models[id] = entry
-    added++
+    added.push(id)
   }
   // Remove the seed placeholder if real models were merged in.
-  if (models['_'] && Object.keys(models).length > 1) {
+  if (Object.hasOwn(models, '_') && Object.keys(models).length > 1) {
     delete models['_']
   }
   return added
@@ -464,7 +464,7 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
         const alreadyInjected = injectedModelIds.get(baseURL)
         if (
           alreadyInjected &&
-          [...alreadyInjected].every((id) => models[id])
+          [...alreadyInjected].every((id) => Object.hasOwn(models, id))
         ) {
           continue
         }
@@ -474,8 +474,8 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
         // `event` hook) keeps the cache fresh for the next launch.
         const cached = readModelCache(baseURL)
         if (cached && Object.keys(cached).length > 0) {
-          mergeModels(models, cached)
-          injectedModelIds.set(baseURL, new Set(Object.keys(models)))
+          const added = mergeModels(models, cached)
+          injectedModelIds.set(baseURL, new Set(added))
           console.log(
             `[opencode-litellm] Loaded ${Object.keys(cached).length} models from cache for provider "${providerId}" (${baseURL}); refresh happens in the background on new sessions.`,
           )
@@ -490,8 +490,8 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
           DISCOVERY_TIMEOUT_MS,
         )
         if (built && Object.keys(built).length > 0) {
-          mergeModels(models, built)
-          injectedModelIds.set(baseURL, new Set(Object.keys(models)))
+          const added = mergeModels(models, built)
+          injectedModelIds.set(baseURL, new Set(added))
           writeModelCache(baseURL, built)
         }
       }
