@@ -11,12 +11,15 @@ import {
   categorizeModel,
 } from '../utils/format-model-name'
 import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
-import { readModelCache, writeModelCache } from '../utils/model-cache'
+import { readModelCache, writeModelCache, readModelCacheSavedAt } from '../utils/model-cache'
 
 const CHAT_PROVIDER_ID = 'litellm'
 // Covers the sequential 3 s health check plus the parallel 15 s
 // models/model-info fetch phase, with headroom.
 const DISCOVERY_TIMEOUT_MS = 20000
+// Don't revalidate a baseURL's cache more often than this, so a burst
+// of `session.created` events can't generate repeated discovery traffic.
+const REFRESH_MIN_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 
 /**
  * OpenCode invokes the `config` hook several times per run with a
@@ -313,6 +316,12 @@ async function backgroundRefresh(baseURL: string): Promise<void> {
   if (refreshInFlight.has(baseURL)) return
   const ctx = refreshContexts.get(baseURL)
   if (!ctx) return
+  // Skip if the cache was refreshed recently — a burst of new sessions
+  // shouldn't hammer the proxy with health checks and discovery calls.
+  const savedAt = readModelCacheSavedAt(baseURL)
+  if (savedAt !== null && Date.now() - savedAt < REFRESH_MIN_INTERVAL_MS) {
+    return
+  }
   refreshInFlight.add(baseURL)
   try {
     const built = await withTimeout(
