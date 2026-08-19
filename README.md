@@ -79,6 +79,7 @@ opencode
 | 🏢 **Provider extraction** | Pulls `litellm_provider` (or the `provider/model` prefix) into `organizationOwner` so models group correctly in the UI. |
 | 🔐 **Auth-aware** | Honours `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` env vars or `provider.litellm.options.apiKey`. |
 | 🌐 **Gateway-friendly** | Supports `customHeaders` for proxies behind Cloudflare Access or other API gateways requiring extra HTTP headers. |
+| 🧩 **Splittable catalog** | `includeModels` / `excludeModels` (glob patterns) let one LiteLLM proxy be divided into several OpenCode providers — e.g. by naming prefix — without hand-maintaining a model list. |
 | ⏱️ **Non-blocking startup** | Health checks fail fast (3 s); discovery fetches are capped at **15 s** for slow remote proxies. Repeat config-hook invocations are a no-op. |
 | 🤝 **Non-destructive merge** | Only adds models you don't already have configured. Hand-curated entries are preserved verbatim. |
 | 🪶 **Zero runtime deps** | Only depends on `@opencode-ai/plugin`. No build step, no bundler. |
@@ -269,6 +270,38 @@ If your LiteLLM proxy is behind Cloudflare Access or another gateway that requir
 ```
 
 These headers are included in every request the plugin makes during model discovery (health check and `/v1/models`). To obtain a Cloudflare Access Service Token, follow the [Cloudflare docs](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/).
+
+### Splitting one proxy into multiple providers (`includeModels` / `excludeModels`)
+
+If your LiteLLM catalog mixes naming conventions from different teams or environments (e.g. `prod/*` and `staging/*`), you can point two OpenCode providers at the *same* proxy and have each one surface only its slice of the catalog:
+
+```jsonc
+{
+  "provider": {
+    "litellm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Prod",
+      "options": {
+        "baseURL": "http://localhost:4000/v1",
+        "includeModels": ["prod/*"]
+      }
+    },
+    "litellm-staging": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Staging",
+      "options": {
+        "baseURL": "http://localhost:4000/v1",
+        "includeModels": ["staging/*"],
+        "excludeModels": ["staging/*-canary"]
+      }
+    }
+  }
+}
+```
+
+- `includeModels` is evaluated first — only ids matching at least one pattern are kept. Omit it to keep everything.
+- `excludeModels` is evaluated after and always wins, even over `includeModels`.
+- Patterns support only `*` (any run of characters); everything else is matched literally.
 
 ## 🔧 How it works
 

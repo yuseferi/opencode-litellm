@@ -10,6 +10,7 @@ import {
   formatModelName,
   categorizeModel,
 } from '../utils/format-model-name'
+import { passesModelFilter } from '../utils/model-filter'
 import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
 
 const CHAT_PROVIDER_ID = 'litellm'
@@ -20,8 +21,9 @@ const DISCOVERY_TIMEOUT_MS = 20000
 /**
  * OpenCode invokes the `config` hook several times per run with a
  * cumulative config object. Track which model ids we already injected
- * per baseURL so repeat invocations can return early instead of
- * re-querying the proxy.
+ * per `providerId:baseURL` (not baseURL alone -- two providers can
+ * share a proxy, see the `cacheKey` comment below) so repeat
+ * invocations can return early instead of re-querying the proxy.
  */
 const injectedModelIds = new Map<string, Set<string>>()
 
@@ -224,6 +226,12 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
           process.env.LITELLM_API_KEY ?? process.env.LITELLM_MASTER_KEY
         const apiKey = configuredKey ?? envKey
         const customHeaders = readCustomHeaders(options)
+        const includeModels = Array.isArray(options.includeModels)
+          ? options.includeModels.filter((v): v is string => typeof v === 'string')
+          : undefined
+        const excludeModels = Array.isArray(options.excludeModels)
+          ? options.excludeModels.filter((v): v is string => typeof v === 'string')
+          : undefined
 
         // Resolve base URL
         let baseURL: string | null = null
@@ -265,9 +273,18 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
 
         const models = actualProvider.models as Record<string, unknown>
 
+        // Keyed by providerId, not just baseURL. Two providers already
+        // shared a baseURL before this change (the litellm/litellm-
+        // responses pair, see README "Reasoning models"), so this map
+        // could already be clobbered between them; includeModels/
+        // excludeModels makes it worse by giving each such pair its own
+        // filtered model set to track, which a shared, baseURL-only key
+        // can't distinguish at all.
+        const cacheKey = `${providerId}:${baseURL}`
+
         // Discover models with timeout
         const work = async () => {
-          const alreadyInjected = injectedModelIds.get(baseURL!)
+          const alreadyInjected = injectedModelIds.get(cacheKey)
           if (
             alreadyInjected &&
             [...alreadyInjected].every((id) => models[id])
@@ -322,12 +339,20 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
           let added = 0
           let skipped = 0
           let wildcards = 0
+          let filtered = 0
           const unmatched: string[] = []
           for (const model of discovered) {
             // Wildcard entries (`deepseek/*`) are access rules, not
             // callable models — invoking one sends a literal `*` upstream.
             if (model.id.includes('*')) {
               wildcards++
+              continue
+            }
+            // `includeModels`/`excludeModels` let one LiteLLM proxy be
+            // split across several OpenCode providers (e.g. by upstream
+            // naming prefix) without hand-maintaining a model list.
+            if (!passesModelFilter(model.id, includeModels, excludeModels)) {
+              filtered++
               continue
             }
             // Don't overwrite user-curated entries
@@ -354,18 +379,30 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
             )
           }
 
+          // Only blame includeModels/excludeModels when every non-wildcard
+          // discovered model was actually removed by it -- if some models
+          // instead hit `skipped` (non-chat) or were already user-curated,
+          // `added === 0` has a cause unrelated to the filter and this
+          // warning would misdirect the user.
+          if (filtered > 0 && filtered + wildcards === discovered.length) {
+            console.warn(
+              `[opencode-litellm] includeModels/excludeModels filtered out all ${filtered} model(s) discovered for provider "${providerId}" — check the glob patterns in options.includeModels/options.excludeModels.`,
+            )
+          }
+
           // Remove the seed placeholder if real models were discovered
           if (models['_'] && Object.keys(models).length > 1) {
             delete models['_']
           }
 
-          injectedModelIds.set(baseURL!, new Set(Object.keys(models)))
+          injectedModelIds.set(cacheKey, new Set(Object.keys(models)))
 
           console.log(
             `[opencode-litellm] Discovered ${discovered.length} models for provider "${providerId}" from ${baseURL} ` +
               `(${added} added` +
               (skipped > 0 ? `, ${skipped} non-chat hidden` : '') +
               (wildcards > 0 ? `, ${wildcards} wildcard ignored` : '') +
+              (filtered > 0 ? `, ${filtered} filtered out by includeModels/excludeModels` : '') +
               ')',
           )
         }

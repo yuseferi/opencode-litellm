@@ -7,6 +7,7 @@ import {
   normalizeBaseURL,
 } from '../utils/litellm-api'
 import { requiresResponsesAPI } from '../utils/format-model-name'
+import { passesModelFilter } from '../utils/model-filter'
 import type { LiteLLMModel, LiteLLMModelInfo, Transport, TransportPolicy } from '../types'
 import { buildModelV2 } from './build-model'
 
@@ -173,7 +174,18 @@ export async function discoverBucket(
     const resolvedApi = { ...api, url: `${baseURL}/v1` }
 
     const routing = readRoutingOptions(provider)
+    const options = (provider?.options ?? {}) as Record<string, unknown>
+    const includeModels = Array.isArray(options.includeModels)
+      ? options.includeModels.filter((v): v is string => typeof v === 'string')
+      : undefined
+    const excludeModels = Array.isArray(options.excludeModels)
+      ? options.excludeModels.filter((v): v is string => typeof v === 'string')
+      : undefined
     for (const model of models) {
+      // `includeModels`/`excludeModels` let one LiteLLM proxy be split
+      // across several OpenCode providers (e.g. by upstream naming
+      // prefix) without hand-maintaining a model list.
+      if (!passesModelFilter(model.id, includeModels, excludeModels)) continue
       if (bucket !== 'all') {
         const transport = pickTransport(
           model,

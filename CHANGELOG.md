@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Features
+
+* **plugin:** filter discovered models via includeModels/excludeModels
+
 # [0.8.0](https://github.com/yuseferi/opencode-litellm/compare/v0.7.1...v0.8.0) (2026-08-04)
 
 
