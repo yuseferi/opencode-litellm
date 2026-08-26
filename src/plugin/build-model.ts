@@ -54,9 +54,12 @@ export function buildModelV2(
       interleaved: false,
     },
     cost: {
-      input: 0,
-      output: 0,
-      cache: { read: 0, write: 0 },
+      input: info?.input_cost_per_token ?? 0,
+      output: info?.output_cost_per_token ?? 0,
+      cache: {
+        read: info?.cache_read_input_token_cost ?? 0,
+        write: info?.cache_creation_input_token_cost ?? 0,
+      },
     },
     limit: {
       context: model.max_input_tokens ?? 0,
