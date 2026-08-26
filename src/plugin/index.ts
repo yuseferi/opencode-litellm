@@ -11,11 +11,15 @@ import {
   categorizeModel,
 } from '../utils/format-model-name'
 import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
+import { readModelCache, writeModelCache, readModelCacheSavedAt } from '../utils/model-cache'
 
 const CHAT_PROVIDER_ID = 'litellm'
 // Covers the sequential 3 s health check plus the parallel 15 s
 // models/model-info fetch phase, with headroom.
 const DISCOVERY_TIMEOUT_MS = 20000
+// Don't revalidate a baseURL's cache more often than this, so a burst
+// of `session.created` events can't generate repeated discovery traffic.
+const REFRESH_MIN_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 
 /**
  * OpenCode invokes the `config` hook several times per run with a
@@ -24,6 +28,37 @@ const DISCOVERY_TIMEOUT_MS = 20000
  * re-querying the proxy.
  */
 const injectedModelIds = new Map<string, Set<string>>()
+
+/**
+ * Per-baseURL fetch context captured during the `config` hook, so the
+ * `event` hook can revalidate the cache in the background (SWR) without
+ * re-deriving auth/headers.
+ */
+interface RefreshContext {
+  apiKey?: string
+  customHeaders?: Record<string, string>
+  providerId: string
+}
+const refreshContexts = new Map<string, RefreshContext>()
+
+/** baseURLs with an in-flight background refresh, to avoid pile-ups. */
+const refreshInFlight = new Set<string>()
+
+/**
+ * Race a promise against a timeout, resolving to `null` if the timeout
+ * wins. Clears the timer either way so a resolved discovery can't keep
+ * a short-lived process alive waiting on a pending `setTimeout`.
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
 
 /**
  * Helper to determine if a provider ID or its configured options indicate
@@ -152,6 +187,161 @@ function toConfigModel(
 }
 
 /**
+ * Fetch and build OpenCode model entries from a LiteLLM proxy.
+ *
+ * Pure with respect to plugin config: it performs the network calls,
+ * classifies + formats each model, and returns a `{ id -> entry }` map.
+ * Returns `null` when the proxy is unreachable/unauthorized or exposes
+ * no models, so callers can distinguish "no data" from "empty result".
+ */
+async function discoverModels(
+  baseURL: string,
+  apiKey: string | undefined,
+  customHeaders: Record<string, string> | undefined,
+  providerId: string,
+): Promise<Record<string, unknown> | null> {
+  if (!(await checkLiteLLMHealth(baseURL, apiKey, customHeaders))) {
+    console.warn(
+      `[opencode-litellm] LiteLLM appears offline or unauthorized for provider "${providerId}" at ${baseURL}`,
+    )
+    return null
+  }
+
+  // `/v1/models` omits `mode` and capability metadata for
+  // database-defined models, so fetch `/v1/model/info` alongside
+  // it. The info call is best-effort: without it, classification
+  // falls back to id heuristics.
+  const [modelsResult, infoResult] = await Promise.allSettled([
+    discoverLiteLLMModels(baseURL, apiKey, customHeaders),
+    discoverLiteLLMModelInfo(baseURL, apiKey, customHeaders),
+  ])
+
+  if (modelsResult.status === 'rejected') {
+    const error = modelsResult.reason
+    console.warn(
+      `[opencode-litellm] Model discovery failed for provider "${providerId}":`,
+      error instanceof Error ? error.message : String(error),
+    )
+    return null
+  }
+
+  const discovered = modelsResult.value
+  let infoByName: Map<string, LiteLLMModelInfo> | null = null
+  if (infoResult.status === 'fulfilled') {
+    infoByName = infoResult.value
+  } else {
+    const reason = infoResult.reason
+    console.warn(
+      `[opencode-litellm] /v1/model/info unavailable for provider "${providerId}"; non-chat model filtering will use id heuristics only:`,
+      reason instanceof Error ? reason.message : String(reason),
+    )
+  }
+
+  if (discovered.length === 0) {
+    console.warn(
+      `[opencode-litellm] LiteLLM responded for provider "${providerId}" but exposed zero models.`,
+    )
+    return null
+  }
+
+  const built: Record<string, unknown> = {}
+  let skipped = 0
+  let wildcards = 0
+  const unmatched: string[] = []
+  for (const model of discovered) {
+    // Wildcard entries (`deepseek/*`) are access rules, not
+    // callable models — invoking one sends a literal `*` upstream.
+    if (model.id.includes('*')) {
+      wildcards++
+      continue
+    }
+    const info = infoByName?.get(model.id)
+    if (infoByName && !info) unmatched.push(model.id)
+    const entry = toConfigModel(info ? enrichModel(model, info) : model, info)
+    if (!entry) {
+      skipped++
+      continue
+    }
+    built[model.id] = entry
+  }
+
+  if (unmatched.length > 0) {
+    console.warn(
+      `[opencode-litellm] /v1/model/info has no entry for ${unmatched.length} model(s) on provider "${providerId}"; ` +
+        `classification uses id heuristics for: ${unmatched.slice(0, 5).join(', ')}` +
+        (unmatched.length > 5 ? `, +${unmatched.length - 5} more` : ''),
+    )
+  }
+
+  console.log(
+    `[opencode-litellm] Discovered ${discovered.length} models for provider "${providerId}" from ${baseURL} ` +
+      `(${Object.keys(built).length} built` +
+      (skipped > 0 ? `, ${skipped} non-chat hidden` : '') +
+      (wildcards > 0 ? `, ${wildcards} wildcard ignored` : '') +
+      ')',
+  )
+
+  return built
+}
+
+/**
+ * Merge freshly built model entries into a provider's `models` map
+ * without clobbering user-curated (or previously injected) entries.
+ * Returns the ids actually added by this call.
+ */
+function mergeModels(
+  models: Record<string, unknown>,
+  built: Record<string, unknown>,
+): string[] {
+  const added: string[] = []
+  for (const [id, entry] of Object.entries(built)) {
+    if (Object.hasOwn(models, id)) continue
+    models[id] = entry
+    added.push(id)
+  }
+  // Remove the seed placeholder if real models were merged in.
+  if (Object.hasOwn(models, '_') && Object.keys(models).length > 1) {
+    delete models['_']
+  }
+  return added
+}
+
+/**
+ * Revalidate a baseURL's model cache off the critical path (SWR). The
+ * refreshed entries land in the on-disk cache and surface on the next
+ * OpenCode start — OpenCode only reads provider config at startup, so
+ * we can't mutate the live picker here.
+ */
+async function backgroundRefresh(baseURL: string): Promise<void> {
+  if (refreshInFlight.has(baseURL)) return
+  const ctx = refreshContexts.get(baseURL)
+  if (!ctx) return
+  // Skip if the cache was refreshed recently — a burst of new sessions
+  // shouldn't hammer the proxy with health checks and discovery calls.
+  const savedAt = readModelCacheSavedAt(baseURL)
+  if (savedAt !== null && Date.now() - savedAt < REFRESH_MIN_INTERVAL_MS) {
+    return
+  }
+  refreshInFlight.add(baseURL)
+  try {
+    const built = await withTimeout(
+      discoverModels(baseURL, ctx.apiKey, ctx.customHeaders, ctx.providerId),
+      DISCOVERY_TIMEOUT_MS,
+    )
+    if (built && Object.keys(built).length > 0) {
+      writeModelCache(baseURL, built)
+      console.log(
+        `[opencode-litellm] Background-refreshed model cache for ${baseURL} (${Object.keys(built).length} models)`,
+      )
+    }
+  } catch {
+    // Best-effort — a failed refresh just leaves the stale cache in place.
+  } finally {
+    refreshInFlight.delete(baseURL)
+  }
+}
+
+/**
  * LiteLLM Plugin for OpenCode.
  *
  * Uses the `config` hook to discover models from a LiteLLM proxy and
@@ -265,117 +455,54 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
 
         const models = actualProvider.models as Record<string, unknown>
 
-        // Discover models with timeout
-        const work = async () => {
-          const alreadyInjected = injectedModelIds.get(baseURL!)
-          if (
-            alreadyInjected &&
-            [...alreadyInjected].every((id) => models[id])
-          ) {
-            return
-          }
+        // Remember how to reach this proxy so the `event` hook can
+        // revalidate its cache in the background on new sessions.
+        refreshContexts.set(baseURL, { apiKey, customHeaders, providerId })
 
-          if (!(await checkLiteLLMHealth(baseURL!, apiKey, customHeaders))) {
-            console.warn(
-              `[opencode-litellm] LiteLLM appears offline or unauthorized for provider "${providerId}" at ${baseURL}`,
-            )
-            return
-          }
-
-          // `/v1/models` omits `mode` and capability metadata for
-          // database-defined models, so fetch `/v1/model/info` alongside
-          // it. The info call is best-effort: without it, classification
-          // falls back to id heuristics.
-          const [modelsResult, infoResult] = await Promise.allSettled([
-            discoverLiteLLMModels(baseURL!, apiKey, customHeaders),
-            discoverLiteLLMModelInfo(baseURL!, apiKey, customHeaders),
-          ])
-
-          if (modelsResult.status === 'rejected') {
-            const error = modelsResult.reason
-            console.warn(
-              `[opencode-litellm] Model discovery failed for provider "${providerId}":`,
-              error instanceof Error ? error.message : String(error),
-            )
-            return
-          }
-
-          const discovered = modelsResult.value
-          let infoByName: Map<string, LiteLLMModelInfo> | null = null
-          if (infoResult.status === 'fulfilled') {
-            infoByName = infoResult.value
-          } else {
-            const reason = infoResult.reason
-            console.warn(
-              `[opencode-litellm] /v1/model/info unavailable for provider "${providerId}"; non-chat model filtering will use id heuristics only:`,
-              reason instanceof Error ? reason.message : String(reason),
-            )
-          }
-
-          if (discovered.length === 0) {
-            console.warn(
-              `[opencode-litellm] LiteLLM responded for provider "${providerId}" but exposed zero models.`,
-            )
-            return
-          }
-
-          let added = 0
-          let skipped = 0
-          let wildcards = 0
-          const unmatched: string[] = []
-          for (const model of discovered) {
-            // Wildcard entries (`deepseek/*`) are access rules, not
-            // callable models — invoking one sends a literal `*` upstream.
-            if (model.id.includes('*')) {
-              wildcards++
-              continue
-            }
-            // Don't overwrite user-curated entries
-            if (models[model.id]) continue
-            const info = infoByName?.get(model.id)
-            if (infoByName && !info) unmatched.push(model.id)
-            const entry = toConfigModel(
-              info ? enrichModel(model, info) : model,
-              info,
-            )
-            if (!entry) {
-              skipped++
-              continue
-            }
-            models[model.id] = entry
-            added++
-          }
-
-          if (unmatched.length > 0) {
-            console.warn(
-              `[opencode-litellm] /v1/model/info has no entry for ${unmatched.length} model(s) on provider "${providerId}"; ` +
-                `classification uses id heuristics for: ${unmatched.slice(0, 5).join(', ')}` +
-                (unmatched.length > 5 ? `, +${unmatched.length - 5} more` : ''),
-            )
-          }
-
-          // Remove the seed placeholder if real models were discovered
-          if (models['_'] && Object.keys(models).length > 1) {
-            delete models['_']
-          }
-
-          injectedModelIds.set(baseURL!, new Set(Object.keys(models)))
-
-          console.log(
-            `[opencode-litellm] Discovered ${discovered.length} models for provider "${providerId}" from ${baseURL} ` +
-              `(${added} added` +
-              (skipped > 0 ? `, ${skipped} non-chat hidden` : '') +
-              (wildcards > 0 ? `, ${wildcards} wildcard ignored` : '') +
-              ')',
-          )
+        // Repeat config-hook invocations within a run are a no-op once
+        // we've injected this baseURL's models.
+        const alreadyInjected = injectedModelIds.get(baseURL)
+        if (
+          alreadyInjected &&
+          [...alreadyInjected].every((id) => Object.hasOwn(models, id))
+        ) {
+          continue
         }
 
-        await Promise.race([
-          work(),
-          new Promise<void>((resolve) =>
-            setTimeout(resolve, DISCOVERY_TIMEOUT_MS),
-          ),
-        ])
+        // SWR fast path: serve cached entries synchronously so startup
+        // isn't blocked on the network. A background refresh (see the
+        // `event` hook) keeps the cache fresh for the next launch.
+        const cached = readModelCache(baseURL)
+        if (cached && Object.keys(cached).length > 0) {
+          const added = mergeModels(models, cached)
+          injectedModelIds.set(baseURL, new Set(added))
+          console.log(
+            `[opencode-litellm] Loaded ${Object.keys(cached).length} models from cache for provider "${providerId}" (${baseURL}); refresh happens in the background on new sessions.`,
+          )
+          continue
+        }
+
+        // Cold cache: do a live fetch (slow first run only), inject, and
+        // persist for subsequent startups. Capped by a timeout so a slow
+        // proxy never blocks boot.
+        const built = await withTimeout(
+          discoverModels(baseURL, apiKey, customHeaders, providerId),
+          DISCOVERY_TIMEOUT_MS,
+        )
+        if (built && Object.keys(built).length > 0) {
+          const added = mergeModels(models, built)
+          injectedModelIds.set(baseURL, new Set(added))
+          writeModelCache(baseURL, built)
+        }
+      }
+    },
+    event: async ({ event }) => {
+      // Revalidate model caches off the critical path when a new session
+      // opens. Fresh data lands in the cache and surfaces on the next
+      // OpenCode start (SWR).
+      if (event.type !== 'session.created') return
+      for (const baseURL of refreshContexts.keys()) {
+        void backgroundRefresh(baseURL)
       }
     },
   }
