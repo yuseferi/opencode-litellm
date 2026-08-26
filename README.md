@@ -1,3 +1,5 @@
+
+
 <div align="center">
 
 <img src="https://raw.githubusercontent.com/yuseferi/opencode-litellm/main/assets/logo.svg" alt="opencode-litellm logo" width="128" height="128" />
@@ -307,7 +309,7 @@ sequenceDiagram
 
 ## 📋 Requirements
 
-- [OpenCode](https://opencode.ai) ≥ 0.1.x with plugin support (`@opencode-ai/plugin ^1.0.166`)
+- [OpenCode](https://opencode.ai) ≥ 0.1.x with plugin support (`@opencode-ai/plugin ^1.14.0`)
 - A running [LiteLLM](https://github.com/BerriAI/litellm) proxy:
   ```bash
   pip install 'litellm[proxy]'
