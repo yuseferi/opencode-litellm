@@ -145,4 +145,25 @@ export interface LiteLLMOptions {
    * ```
    */
   customHeaders?: Record<string, string>
+  /**
+   * Only inject discovered models whose `id` matches at least one of
+   * these glob patterns (`*` = any run of characters, e.g.
+   * `"anthropic/*"`). Evaluated before `excludeModels`. Lets a
+   * single LiteLLM proxy be split across several OpenCode providers —
+   * e.g. one provider per upstream naming prefix — without hand-
+   * maintaining a model list.
+   *
+   * An empty or omitted array means "don't filter" (every id passes),
+   * not "match nothing." Non-string entries are silently dropped
+   * before matching, so a typo'd non-string entry degrades toward "no
+   * filter" rather than raising an error.
+   */
+  includeModels?: string[]
+  /**
+   * Drop discovered models whose `id` matches any of these glob
+   * patterns, even if they passed `includeModels`. Same pattern syntax
+   * and the same empty-array/non-string-entry behavior as
+   * `includeModels` above.
+   */
+  excludeModels?: string[]
 }
