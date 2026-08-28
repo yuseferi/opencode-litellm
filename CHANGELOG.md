@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Bug Fixes
+
+* keep trailing-wildcard model aliases (`claude-sonnet-4-6*`) in discovery; only `provider/*` wildcards are filtered out
+
 # [0.10.0](https://github.com/yuseferi/opencode-litellm/compare/v0.9.0...v0.10.0) (2026-08-26)
 
 
