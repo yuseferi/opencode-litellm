@@ -250,9 +250,10 @@ async function discoverModels(
   let wildcards = 0
   const unmatched: string[] = []
   for (const model of discovered) {
-    // Wildcard entries (`deepseek/*`) are access rules, not
-    // callable models — invoking one sends a literal `*` upstream.
-    if (model.id.includes('*')) {
+    // `deepseek/*` is an access rule, not a callable model. But a
+    // trailing `*` (`claude-sonnet-4-6*`) is a model-group alias,
+    // so only skip the `provider/*` form.
+    if (model.id.includes('/*')) {
       wildcards++
       continue
     }

@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Bug Fixes
+
+* keep trailing-wildcard model aliases (`claude-sonnet-4-6*`) in discovery; only `provider/*` wildcards are filtered out
+
 # [0.11.0](https://github.com/yuseferi/opencode-litellm/compare/v0.10.0...v0.11.0) (2026-08-29)
 
 
@@ -5,10 +11,10 @@
 
 * **plugin:** fall back to OpenCode-stored /connect credentials for plugin auth ([#17](https://github.com/yuseferi/opencode-litellm/issues/17)) ([43f4c9d](https://github.com/yuseferi/opencode-litellm/commit/43f4c9d6907a3e4e2de9b816d4af5b2cb3a4bcc9))
 
+
 # [0.10.0](https://github.com/yuseferi/opencode-litellm/compare/v0.9.0...v0.10.0) (2026-08-26)
 
 
-### Features
 
 * stale-while-revalidate file cache for model discovery ([#19](https://github.com/yuseferi/opencode-litellm/issues/19)) ([f0e41ae](https://github.com/yuseferi/opencode-litellm/commit/f0e41ae24e3a37b0f175b208a4c68a8939d99b4e))
 
