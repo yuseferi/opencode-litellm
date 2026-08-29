@@ -1,3 +1,10 @@
+## [0.11.1](https://github.com/yuseferi/opencode-litellm/compare/v0.11.0...v0.11.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* keep wildcard model aliases in discovery ([#23](https://github.com/yuseferi/opencode-litellm/issues/23)) ([2915da3](https://github.com/yuseferi/opencode-litellm/commit/2915da371633ffa1b22c44e051e20fbfc9a32c7b))
+
 ## [Unreleased]
 
 ### Bug Fixes
