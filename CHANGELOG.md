@@ -1,3 +1,17 @@
+# [0.10.0](https://github.com/yuseferi/opencode-litellm/compare/v0.9.0...v0.10.0) (2026-08-26)
+
+
+### Features
+
+* stale-while-revalidate file cache for model discovery ([#19](https://github.com/yuseferi/opencode-litellm/issues/19)) ([f0e41ae](https://github.com/yuseferi/opencode-litellm/commit/f0e41ae24e3a37b0f175b208a4c68a8939d99b4e))
+
+# [0.9.0](https://github.com/yuseferi/opencode-litellm/compare/v0.8.0...v0.9.0) (2026-08-26)
+
+
+### Features
+
+* map LiteLLM model prices into OpenCode cost field ([#22](https://github.com/yuseferi/opencode-litellm/issues/22)) ([cb9254d](https://github.com/yuseferi/opencode-litellm/commit/cb9254d453d0c6b3cf80118c6916103d4c6b9128))
+
 # [0.8.0](https://github.com/yuseferi/opencode-litellm/compare/v0.7.1...v0.8.0) (2026-08-04)
 
 
