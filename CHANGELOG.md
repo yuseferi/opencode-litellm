@@ -59,6 +59,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **plugin:** surface reasoning-effort variants from `/v1/model/info` reported by LiteLLM
 
 ### Fixed
+- **LiteLLM model discovery now works when the proxy credential was only
+  ever stored via OpenCode's `/connect` command.** The plugin's health
+  check and `/v1/models` / `/v1/model/info` discovery fetches only ever
+  read `options.apiKey` or the `LITELLM_API_KEY` / `LITELLM_MASTER_KEY`
+  env vars. Credentials added through `/connect` (stored in
+  `~/.local/share/opencode/auth.json`) were invisible to them, and for
+  this custom provider OpenCode does not inject stored credentials
+  automatically, so a key-only proxy would fail the health check with
+  an unauthenticated 401, skip discovery entirely, and send chat
+  completions without an `Authorization` header. The plugin now falls
+  back to reading that stored credential and writes the resolved key
+  back into the provider `options`, enabling both authenticated
+  discovery and authenticated completions (precedence: configured
+  `apiKey` > env var > OpenCode-stored credential).
 - **Discovered models now carry real pricing instead of always showing
   `$0.00`.** `toConfigModel()` never read `input_cost_per_token` /
   `output_cost_per_token` from `/v1/model/info`, so every model —

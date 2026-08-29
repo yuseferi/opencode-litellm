@@ -11,6 +11,7 @@ import {
   categorizeModel,
 } from '../utils/format-model-name'
 import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
+import { getOpenCodeStoredApiKey } from '../utils/opencode-auth'
 import { readModelCache, writeModelCache, readModelCacheSavedAt } from '../utils/model-cache'
 
 const CHAT_PROVIDER_ID = 'litellm'
@@ -411,8 +412,17 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
             ? options.apiKey
             : undefined
         const envKey =
-          process.env.LITELLM_API_KEY ?? process.env.LITELLM_MASTER_KEY
-        const apiKey = configuredKey ?? envKey
+          process.env.LITELLM_API_KEY || process.env.LITELLM_MASTER_KEY || undefined
+        /*
+        Falls back to the key OpenCode itself stored for this provider id via
+        '/connect' (~/.local/share/opencode/auth.json). For a custom provider
+        like this one there is no automatic auth.json injection (see below), so
+        the plugin reads the stored key here and applies it to both its own
+        discovery fetches and the completion-time provider options. Without it,
+        a key-only proxy would fail discovery even though chat works.
+        */
+        const storedKey = await getOpenCodeStoredApiKey(providerId)
+        const apiKey = configuredKey ?? envKey ?? storedKey
         const customHeaders = readCustomHeaders(options)
 
         // Resolve base URL
@@ -441,12 +451,25 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
         }
 
         if (!actualProvider.options) {
-          actualProvider.options = { baseURL: `${baseURL}/v1` }
-        } else {
-          const actualOptions = actualProvider.options as Record<string, unknown>
-          if (!actualOptions.baseURL) {
-            actualOptions.baseURL = `${baseURL}/v1`
-          }
+          actualProvider.options = {}
+        }
+        const actualOptions = actualProvider.options as Record<string, unknown>
+        if (!actualOptions.baseURL) {
+          actualOptions.baseURL = `${baseURL}/v1`
+        }
+        /*
+        For a fully custom, config-only provider like this one, OpenCode
+        builds the real completion-time AI SDK client straight from
+        `options` - there's no separate auth.json auto-injection for
+        arbitrary custom providers (that only applies to a handful of
+        models.dev-catalog providers with special-cased loaders). So the
+        `apiKey` resolved above (config > env var > OpenCode-stored
+        credential) must be written back here, or real chat completions
+        go out with no Authorization header even though discovery
+        succeeded using the same resolved key.
+        */
+        if (!actualOptions.apiKey && apiKey) {
+          actualOptions.apiKey = apiKey
         }
 
         if (!actualProvider.models) {

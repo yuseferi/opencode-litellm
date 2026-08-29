@@ -246,8 +246,9 @@ If your LiteLLM proxy requires a master key, expose it via either approach:
 | Env var | `export LITELLM_API_KEY=sk-...` |
 | Env var (alias) | `export LITELLM_MASTER_KEY=sk-...` |
 | Config | `"options": { "apiKey": "{env:LITELLM_API_KEY}" }` |
+| OpenCode `/connect` | Run `/connect`, search for your `litellm` provider entry, and paste the key |
 
-The env var path lets you commit `opencode.json` without leaking secrets.
+The env var path lets you commit `opencode.json` without leaking secrets. The `/connect` path is useful when you'd rather manage the credential through OpenCode's own auth store (`~/.local/share/opencode/auth.json`) instead of an env var or config file — the plugin reads that file as a fallback and applies the stored key to its own health-check, model-discovery, and completion-time provider requests, so a key-only proxy works end to end.
 
 ### Custom headers (Cloudflare Access, API gateways)
 
