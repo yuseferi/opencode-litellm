@@ -115,6 +115,9 @@ function enrichModel(model: LiteLLMModel, info: LiteLLMModelInfo): LiteLLMModel 
     supports_audio_input: model.supports_audio_input ?? info.supports_audio_input,
     input_cost_per_token: model.input_cost_per_token ?? info.input_cost_per_token,
     output_cost_per_token: model.output_cost_per_token ?? info.output_cost_per_token,
+    cache_read_input_token_cost: model.cache_read_input_token_cost ?? info.cache_read_input_token_cost,
+    cache_creation_input_token_cost:
+      model.cache_creation_input_token_cost ?? info.cache_creation_input_token_cost,
   }
 }
 
@@ -144,9 +147,12 @@ function toConfigModel(
   const entry: Record<string, unknown> = {
     name: formatModelName(model),
   }
-  if (model.max_input_tokens || model.max_output_tokens) {
+  // Some deployments only report the OpenAI-style `max_tokens` total;
+  // use it as the context limit when `max_input_tokens` is absent.
+  const contextLimit = model.max_input_tokens ?? model.max_tokens
+  if (contextLimit || model.max_output_tokens) {
     entry.limit = {
-      context: model.max_input_tokens ?? 0,
+      context: contextLimit ?? 0,
       output: model.max_output_tokens ?? 0,
     }
   }
@@ -164,10 +170,17 @@ function toConfigModel(
   // to their own default instead of us asserting "this model is free"
   // for something LiteLLM simply has no price anchor for (e.g. rerank).
   if (model.input_cost_per_token != null || model.output_cost_per_token != null) {
-    entry.cost = {
+    const cost: Record<string, number> = {
       input: (model.input_cost_per_token ?? 0) * USD_PER_TOKEN_TO_PER_MILLION,
       output: (model.output_cost_per_token ?? 0) * USD_PER_TOKEN_TO_PER_MILLION,
     }
+    if (model.cache_read_input_token_cost != null) {
+      cost.cacheRead = model.cache_read_input_token_cost * USD_PER_TOKEN_TO_PER_MILLION
+    }
+    if (model.cache_creation_input_token_cost != null) {
+      cost.cacheWrite = model.cache_creation_input_token_cost * USD_PER_TOKEN_TO_PER_MILLION
+    }
+    entry.cost = cost
   }
   const input: Array<'text' | 'image' | 'pdf' | 'audio'> = ['text']
   if (model.supports_vision) input.push('image')
@@ -318,9 +331,10 @@ async function backgroundRefresh(baseURL: string): Promise<void> {
   if (refreshInFlight.has(baseURL)) return
   const ctx = refreshContexts.get(baseURL)
   if (!ctx) return
+  const cacheKey = `${ctx.providerId}@${baseURL}`
   // Skip if the cache was refreshed recently — a burst of new sessions
   // shouldn't hammer the proxy with health checks and discovery calls.
-  const savedAt = readModelCacheSavedAt(baseURL)
+  const savedAt = readModelCacheSavedAt(cacheKey)
   if (savedAt !== null && Date.now() - savedAt < REFRESH_MIN_INTERVAL_MS) {
     return
   }
@@ -331,7 +345,7 @@ async function backgroundRefresh(baseURL: string): Promise<void> {
       DISCOVERY_TIMEOUT_MS,
     )
     if (built && Object.keys(built).length > 0) {
-      writeModelCache(baseURL, built)
+      writeModelCache(cacheKey, built)
       console.log(
         `[opencode-litellm] Background-refreshed model cache for ${baseURL} (${Object.keys(built).length} models)`,
       )
@@ -496,7 +510,10 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
         // SWR fast path: serve cached entries synchronously so startup
         // isn't blocked on the network. A background refresh (see the
         // `event` hook) keeps the cache fresh for the next launch.
-        const cached = readModelCache(baseURL)
+        // The cache is scoped per provider so two providers pointing at
+        // the same proxy (with different keys) don't share model lists.
+        const cacheKey = `${providerId}@${baseURL}`
+        const cached = readModelCache(cacheKey)
         if (cached && Object.keys(cached).length > 0) {
           const added = mergeModels(models, cached)
           injectedModelIds.set(baseURL, new Set(added))
@@ -516,7 +533,7 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
         if (built && Object.keys(built).length > 0) {
           const added = mergeModels(models, built)
           injectedModelIds.set(baseURL, new Set(added))
-          writeModelCache(baseURL, built)
+          writeModelCache(cacheKey, built)
         }
       }
     },

@@ -40,6 +40,8 @@ export interface LiteLLMModel {
    */
   input_cost_per_token?: number
   output_cost_per_token?: number
+  cache_read_input_token_cost?: number
+  cache_creation_input_token_cost?: number
 }
 
 export interface LiteLLMModelsResponse {
@@ -82,67 +84,4 @@ export interface LiteLLMModelInfoEntry {
 
 export interface LiteLLMModelInfoResponse {
   data?: LiteLLMModelInfoEntry[]
-}
-
-export type ModelType = 'chat' | 'embedding' | 'image' | 'audio' | 'unknown'
-
-/**
- * Which OpenAI-compatible HTTP surface a model should be invoked through.
- *
- * - `chat`      → `/v1/chat/completions` (most models)
- * - `responses` → `/v1/responses`        (gpt-5*, o-series with reasoning)
- */
-export type Transport = 'chat' | 'responses'
-
-/**
- * User-facing routing override. Defaults to `'auto'`.
- *
- * - `'auto'`      → use the heuristic + LiteLLM `mode` field
- * - `'chat'`      → force every discovered model into the chat-completions provider
- * - `'responses'` → force every discovered model into the responses provider
- */
-export type TransportPolicy = 'auto' | Transport
-
-export interface LiteLLMOptions {
-  baseURL?: string
-  apiKey?: string
-  /**
-   * Routing policy for discovered models. See {@link TransportPolicy}.
-   * Defaults to `'auto'`.
-   */
-  transport?: TransportPolicy
-  /**
-   * Explicit allowlist of model ids that MUST be routed through the
-   * OpenAI Responses API (`/v1/responses`). Takes priority over the
-   * heuristic and over the `transport` policy.
-   *
-   * Match is exact against the LiteLLM model id (e.g. `"gpt-5-4-high"`).
-   */
-  responsesApiModels?: string[]
-  /**
-   * Explicit denylist of model ids that MUST be routed through chat
-   * completions (`/v1/chat/completions`), even if the heuristic would
-   * otherwise put them in the responses bucket. Takes priority over
-   * the heuristic but is overridden by `responsesApiModels`.
-   */
-  chatApiModels?: string[]
-  /**
-   * Arbitrary HTTP headers to include in every request to the LiteLLM
-   * proxy during model discovery (health check + `/v1/models`).
-   *
-   * Useful for proxies behind Cloudflare Access or other gateways that
-   * require extra authentication headers beyond the standard
-   * `Authorization: Bearer` token.
-   *
-   * Example (Cloudflare Access Service Token):
-   * ```json
-   * {
-   *   "customHeaders": {
-   *     "CF-Access-Client-Id": "{env:CF_ACCESS_CLIENT_ID}",
-   *     "CF-Access-Client-Secret": "{env:CF_ACCESS_CLIENT_SECRET}"
-   *   }
-   * }
-   * ```
-   */
-  customHeaders?: Record<string, string>
 }
