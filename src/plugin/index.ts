@@ -175,10 +175,10 @@ function toConfigModel(
       output: (model.output_cost_per_token ?? 0) * USD_PER_TOKEN_TO_PER_MILLION,
     }
     if (model.cache_read_input_token_cost != null) {
-      cost.cacheRead = model.cache_read_input_token_cost * USD_PER_TOKEN_TO_PER_MILLION
+      cost.cache_read = model.cache_read_input_token_cost * USD_PER_TOKEN_TO_PER_MILLION
     }
     if (model.cache_creation_input_token_cost != null) {
-      cost.cacheWrite = model.cache_creation_input_token_cost * USD_PER_TOKEN_TO_PER_MILLION
+      cost.cache_write = model.cache_creation_input_token_cost * USD_PER_TOKEN_TO_PER_MILLION
     }
     entry.cost = cost
   }
