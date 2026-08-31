@@ -246,13 +246,13 @@ sequenceDiagram
 
     OC->>Plugin: config(initial)
     alt provider.litellm configured
-        Plugin->>LL: health check GET /v1/models @ baseURL
+        Plugin->>Plugin: use configured baseURL
     else not configured
-        Plugin->>LL: probe :4000, :8000, :8080
+        Plugin->>LL: probe :4000, :8000, :8080 (GET /v1/models, 3 s fail-fast)
         LL-->>Plugin: 200 OK on one
         Plugin->>Plugin: auto-create provider entry
     end
-    Plugin->>Cache: read SWR cache
+    Plugin->>Cache: read SWR cache (no network yet)
     alt cache hit
         Cache-->>Plugin: cached models
         Plugin->>OC: merge into provider.litellm (instant startup)
@@ -270,8 +270,8 @@ sequenceDiagram
 ```
 
 1. On OpenCode startup the `config` lifecycle hook fires.
-2. If `provider.litellm` exists, its `baseURL` is used. Otherwise common ports are probed.
-3. A health check (`GET /v1/models`) verifies the proxy is reachable and authorized (3 s fail-fast).
+2. If `provider.litellm` exists, its `baseURL` is used. Otherwise common ports are probed — that probe is the only health check (3 s fail-fast per port).
+3. With a configured `baseURL` the proxy is not contacted during startup unless the cache is cold; the discovery fetch itself fails fast if the proxy is unreachable.
 4. **Fast path:** if a fresh on-disk cache exists (≤ 7 days old), its models are merged in synchronously — startup never waits on the network.
 5. **Cold path:** `/v1/models` and `/v1/model/info` are fetched in parallel. Models are enriched with info metadata (`mode`, token limits, capability flags, per-token pricing — `/v1/models` omits these for database-defined models) and converted into OpenCode model entries with formatted `name`, inferred `modalities`, and `cost` (USD/1M tokens, converted from LiteLLM's USD/token). Non-chat models (embedding / image / audio) are excluded from the picker.
 6. Discovered models are merged on top of any user-defined ones — never overwriting them — and persisted to the cache.
