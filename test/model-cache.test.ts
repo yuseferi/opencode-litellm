@@ -8,6 +8,7 @@ import { readModelCache, readModelCacheSavedAt, writeModelCache } from '../src/u
 const KEY = 'litellm@http://localhost:4000'
 
 let cacheHome: string
+const originalCacheHome = process.env.XDG_CACHE_HOME
 
 function cachePathFor(key: string): string {
   const hash = createHash('sha256').update(key).digest('hex').slice(0, 16)
@@ -27,7 +28,11 @@ beforeAll(() => {
 
 afterAll(() => {
   rmSync(cacheHome, { recursive: true, force: true })
-  delete process.env.XDG_CACHE_HOME
+  if (originalCacheHome === undefined) {
+    delete process.env.XDG_CACHE_HOME
+  } else {
+    process.env.XDG_CACHE_HOME = originalCacheHome
+  }
 })
 
 describe('model cache', () => {
