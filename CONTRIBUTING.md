@@ -18,6 +18,7 @@ git clone https://github.com/yuseferi/opencode-litellm.git
 cd opencode-litellm
 npm install
 npm run typecheck
+npm test
 ```
 
 ## Testing locally against your OpenCode
@@ -32,11 +33,12 @@ npm link opencode-plugin-litellm
 opencode
 ```
 
-Plugin logs are prefixed with `[opencode-litellm]` — `tail -f ~/.opencode/logs/...` to watch them.
+Plugin logs are prefixed with `[opencode-litellm]` — find them under `~/.local/share/opencode/log/`.
 
 ## Pull request checklist
 
 - [ ] `npm run typecheck` passes locally
+- [ ] `npm test` passes locally; behavior changes come with test updates
 - [ ] No new runtime dependencies (or strong justification in the PR description)
 - [ ] Public API changes are reflected in the README
 - [ ] User-visible changes are added to `CHANGELOG.md` under `## [Unreleased]`

@@ -1,20 +1,6 @@
 import type { LiteLLMModel } from '../types'
 
 /**
- * Extract owner / provider from a LiteLLM model ID.
- *
- * LiteLLM model IDs commonly take the shape `<provider>/<model>` (e.g.
- * `openai/gpt-4o`, `anthropic/claude-3-5-sonnet`, `bedrock/...`). When
- * available we prefer the `litellm_provider` field returned by the API.
- */
-export function extractModelOwner(model: LiteLLMModel): string | undefined {
-  if (model.litellm_provider) return model.litellm_provider
-  const parts = model.id.split('/')
-  if (parts.length > 1) return parts[0]
-  return undefined
-}
-
-/**
  * Strip Vertex-style version pinning suffixes that have no place in a
  * display name. LiteLLM exposes Anthropic-on-Vertex models with ids
  * like `claude-opus-4-5@20251101` or `claude-sonnet-4-6@default`; those
@@ -46,22 +32,32 @@ function looksLikeVersionComponent(token: string): boolean {
  * "Claude Opus 4 5".
  *
  * Conservative on purpose:
- *   - Only the LAST adjacent pair is collapsed, so `gpt-3-5-turbo-16k`
- *     keeps `[3, 5, turbo, 16k]` (`turbo` between blocks the merge).
- *   - Both tokens must look like real version components (1–2 digits) —
- *     this avoids merging date stamps in ids like
- *     `claude-opus-4-5-20251101`, where the trailing `20251101` is a
- *     YYYYMMDD revision and must stay separate.
+ *   - Only the FIRST mergeable pair scanning from the right is collapsed:
+ *     `gpt-3-5-turbo-16k` merges `3-5` into `3.5` and stops there.
+ *   - Both tokens must look like real version components (1–2 digits),
+ *     so a `YYYYMMDD` revision stamp like `20251101` is never merged
+ *     into a version number itself.
  *   - We refuse to collapse if the token immediately AFTER the pair is
- *     also numeric (would create ambiguity in `1-2-3` runs).
+ *     also a short number, or if the token immediately BEFORE it is one
+ *     too — both signal an ambiguous numeric run (`1-2-3`) rather than
+ *     a version pair. A trailing 6–8 digit `YYYYMMDD` revision stamp
+ *     does not block the merge — it stays its own token, so
+ *     `claude-opus-4-5-20251101` renders "Claude Opus 4.5 20251101",
+ *     not "Claude Opus 4 5 20251101".
  */
 function joinTrailingVersionPair(tokens: string[]): string[] {
   for (let i = tokens.length - 1; i >= 1; i--) {
     const a = tokens[i - 1]
     const b = tokens[i]
     if (looksLikeVersionComponent(a) && looksLikeVersionComponent(b)) {
+      const prev = tokens[i - 2]
       const next = tokens[i + 1]
-      if (next === undefined || !/^\d+$/.test(next)) {
+      const prevIsShortNumeric = prev !== undefined && looksLikeVersionComponent(prev)
+      const nextIsDateStamp = next !== undefined && /^\d{6,8}$/.test(next)
+      if (
+        !prevIsShortNumeric &&
+        (next === undefined || nextIsDateStamp || !/^\d+$/.test(next))
+      ) {
         const merged = [...tokens.slice(0, i - 1), `${a}.${b}`, ...tokens.slice(i + 1)]
         return merged
       }
@@ -158,33 +154,4 @@ export function formatModelName(model: LiteLLMModel): string {
   })
 
   return tokens.join(' ') || id
-}
-
-/**
- * Decide whether a model must be invoked through the OpenAI Responses
- * API (`/v1/responses`) instead of `/v1/chat/completions`.
- *
- * OpenAI's reasoning-tier models (gpt-5*, o1/o3/o4*) reject requests
- * that combine `reasoning_effort` with function tools when sent to
- * `/v1/chat/completions`. The Responses API has no such restriction,
- * so we route those models there.
- *
- * Detection rules (first match wins):
- *   1. `model.mode === 'responses'` (LiteLLM exposes this on newer versions)
- *   2. The model id (after any `provider/` prefix) matches the
- *      `gpt-5*` / `o[134]*` family.
- */
-export function requiresResponsesAPI(model: LiteLLMModel): boolean {
-  if (model.mode && model.mode.toLowerCase() === 'responses') return true
-
-  const id = model.id.toLowerCase()
-  const slashIdx = id.indexOf('/')
-  const tail = slashIdx >= 0 ? id.slice(slashIdx + 1) : id
-
-  // gpt-5, gpt-5.4, gpt-5-4-high, gpt-5o, ...
-  if (/^gpt-?5(?:[-.].*)?$/.test(tail)) return true
-  // o1, o1-mini, o3, o3-mini, o4-mini, o4, ... but NOT "openai", "ollama"
-  if (/^o[134](?:[-.].*)?$/.test(tail)) return true
-
-  return false
 }

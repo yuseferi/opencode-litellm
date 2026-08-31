@@ -25,24 +25,27 @@ const REFRESH_MIN_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 /**
  * OpenCode invokes the `config` hook several times per run with a
  * cumulative config object. Track which model ids we already injected
- * per baseURL so repeat invocations can return early instead of
- * re-querying the proxy.
+ * per provider (keyed by `providerId@baseURL`) so repeat invocations
+ * can return early instead of re-querying the proxy.
  */
 const injectedModelIds = new Map<string, Set<string>>()
 
 /**
- * Per-baseURL fetch context captured during the `config` hook, so the
+ * Per-provider fetch context captured during the `config` hook, so the
  * `event` hook can revalidate the cache in the background (SWR) without
- * re-deriving auth/headers.
+ * re-deriving auth/headers. Keyed by `providerId@baseURL` — the same
+ * key as the on-disk cache — so providers sharing a proxy keep
+ * independent refresh contexts.
  */
 interface RefreshContext {
+  baseURL: string
   apiKey?: string
   customHeaders?: Record<string, string>
   providerId: string
 }
 const refreshContexts = new Map<string, RefreshContext>()
 
-/** baseURLs with an in-flight background refresh, to avoid pile-ups. */
+/** Cache keys with an in-flight background refresh, to avoid pile-ups. */
 const refreshInFlight = new Set<string>()
 
 /**
@@ -115,6 +118,9 @@ function enrichModel(model: LiteLLMModel, info: LiteLLMModelInfo): LiteLLMModel 
     supports_audio_input: model.supports_audio_input ?? info.supports_audio_input,
     input_cost_per_token: model.input_cost_per_token ?? info.input_cost_per_token,
     output_cost_per_token: model.output_cost_per_token ?? info.output_cost_per_token,
+    cache_read_input_token_cost: model.cache_read_input_token_cost ?? info.cache_read_input_token_cost,
+    cache_creation_input_token_cost:
+      model.cache_creation_input_token_cost ?? info.cache_creation_input_token_cost,
   }
 }
 
@@ -144,9 +150,12 @@ function toConfigModel(
   const entry: Record<string, unknown> = {
     name: formatModelName(model),
   }
-  if (model.max_input_tokens || model.max_output_tokens) {
+  // Some deployments only report the OpenAI-style `max_tokens` total;
+  // use it as the context limit when `max_input_tokens` is absent.
+  const contextLimit = model.max_input_tokens ?? model.max_tokens
+  if (contextLimit || model.max_output_tokens) {
     entry.limit = {
-      context: model.max_input_tokens ?? 0,
+      context: contextLimit ?? 0,
       output: model.max_output_tokens ?? 0,
     }
   }
@@ -164,10 +173,17 @@ function toConfigModel(
   // to their own default instead of us asserting "this model is free"
   // for something LiteLLM simply has no price anchor for (e.g. rerank).
   if (model.input_cost_per_token != null || model.output_cost_per_token != null) {
-    entry.cost = {
+    const cost: Record<string, number> = {
       input: (model.input_cost_per_token ?? 0) * USD_PER_TOKEN_TO_PER_MILLION,
       output: (model.output_cost_per_token ?? 0) * USD_PER_TOKEN_TO_PER_MILLION,
     }
+    if (model.cache_read_input_token_cost != null) {
+      cost.cache_read = model.cache_read_input_token_cost * USD_PER_TOKEN_TO_PER_MILLION
+    }
+    if (model.cache_creation_input_token_cost != null) {
+      cost.cache_write = model.cache_creation_input_token_cost * USD_PER_TOKEN_TO_PER_MILLION
+    }
+    entry.cost = cost
   }
   const input: Array<'text' | 'image' | 'pdf' | 'audio'> = ['text']
   if (model.supports_vision) input.push('image')
@@ -309,37 +325,37 @@ function mergeModels(
 }
 
 /**
- * Revalidate a baseURL's model cache off the critical path (SWR). The
+ * Revalidate a provider's model cache off the critical path (SWR). The
  * refreshed entries land in the on-disk cache and surface on the next
  * OpenCode start — OpenCode only reads provider config at startup, so
  * we can't mutate the live picker here.
  */
-async function backgroundRefresh(baseURL: string): Promise<void> {
-  if (refreshInFlight.has(baseURL)) return
-  const ctx = refreshContexts.get(baseURL)
+async function backgroundRefresh(cacheKey: string): Promise<void> {
+  if (refreshInFlight.has(cacheKey)) return
+  const ctx = refreshContexts.get(cacheKey)
   if (!ctx) return
   // Skip if the cache was refreshed recently — a burst of new sessions
   // shouldn't hammer the proxy with health checks and discovery calls.
-  const savedAt = readModelCacheSavedAt(baseURL)
+  const savedAt = readModelCacheSavedAt(cacheKey)
   if (savedAt !== null && Date.now() - savedAt < REFRESH_MIN_INTERVAL_MS) {
     return
   }
-  refreshInFlight.add(baseURL)
+  refreshInFlight.add(cacheKey)
   try {
     const built = await withTimeout(
-      discoverModels(baseURL, ctx.apiKey, ctx.customHeaders, ctx.providerId),
+      discoverModels(ctx.baseURL, ctx.apiKey, ctx.customHeaders, ctx.providerId),
       DISCOVERY_TIMEOUT_MS,
     )
     if (built && Object.keys(built).length > 0) {
-      writeModelCache(baseURL, built)
+      writeModelCache(cacheKey, built)
       console.log(
-        `[opencode-litellm] Background-refreshed model cache for ${baseURL} (${Object.keys(built).length} models)`,
+        `[opencode-litellm] Background-refreshed model cache for ${ctx.baseURL} (${Object.keys(built).length} models)`,
       )
     }
   } catch {
     // Best-effort — a failed refresh just leaves the stale cache in place.
   } finally {
-    refreshInFlight.delete(baseURL)
+    refreshInFlight.delete(cacheKey)
   }
 }
 
@@ -479,13 +495,15 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
 
         const models = actualProvider.models as Record<string, unknown>
 
+        const cacheKey = `${providerId}@${baseURL}`
+
         // Remember how to reach this proxy so the `event` hook can
         // revalidate its cache in the background on new sessions.
-        refreshContexts.set(baseURL, { apiKey, customHeaders, providerId })
+        refreshContexts.set(cacheKey, { baseURL, apiKey, customHeaders, providerId })
 
         // Repeat config-hook invocations within a run are a no-op once
-        // we've injected this baseURL's models.
-        const alreadyInjected = injectedModelIds.get(baseURL)
+        // we've injected this provider's models.
+        const alreadyInjected = injectedModelIds.get(cacheKey)
         if (
           alreadyInjected &&
           [...alreadyInjected].every((id) => Object.hasOwn(models, id))
@@ -496,10 +514,12 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
         // SWR fast path: serve cached entries synchronously so startup
         // isn't blocked on the network. A background refresh (see the
         // `event` hook) keeps the cache fresh for the next launch.
-        const cached = readModelCache(baseURL)
+        // The cache is scoped per provider so two providers pointing at
+        // the same proxy (with different keys) don't share model lists.
+        const cached = readModelCache(cacheKey)
         if (cached && Object.keys(cached).length > 0) {
           const added = mergeModels(models, cached)
-          injectedModelIds.set(baseURL, new Set(added))
+          injectedModelIds.set(cacheKey, new Set(added))
           console.log(
             `[opencode-litellm] Loaded ${Object.keys(cached).length} models from cache for provider "${providerId}" (${baseURL}); refresh happens in the background on new sessions.`,
           )
@@ -515,8 +535,8 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
         )
         if (built && Object.keys(built).length > 0) {
           const added = mergeModels(models, built)
-          injectedModelIds.set(baseURL, new Set(added))
-          writeModelCache(baseURL, built)
+          injectedModelIds.set(cacheKey, new Set(added))
+          writeModelCache(cacheKey, built)
         }
       }
     },
@@ -525,8 +545,8 @@ export const LiteLLMPlugin: Plugin = async (_input: PluginInput) => {
       // opens. Fresh data lands in the cache and surfaces on the next
       // OpenCode start (SWR).
       if (event.type !== 'session.created') return
-      for (const baseURL of refreshContexts.keys()) {
-        void backgroundRefresh(baseURL)
+      for (const cacheKey of refreshContexts.keys()) {
+        void backgroundRefresh(cacheKey)
       }
     },
   }

@@ -37,23 +37,27 @@ function cacheDir(): string {
   return join(base, 'opencode-litellm')
 }
 
-/** Stable, filesystem-safe filename derived from the normalized baseURL. */
-function cacheFile(baseURL: string): string {
-  const hash = createHash('sha256').update(baseURL).digest('hex').slice(0, 16)
+/**
+ * Stable, filesystem-safe filename derived from the cache key. Callers
+ * pass `providerId@baseURL` so two providers pointing at the same proxy
+ * (possibly with different API keys) keep separate caches.
+ */
+function cacheFile(cacheKey: string): string {
+  const hash = createHash('sha256').update(cacheKey).digest('hex').slice(0, 16)
   return join(cacheDir(), `models-${hash}.json`)
 }
 
 /**
- * Read cached model entries for a baseURL. Returns `null` on any
+ * Read cached model entries for a cache key. Returns `null` on any
  * problem (missing file, parse error, version mismatch, or an entry
  * older than `CACHE_MAX_AGE_MS`) — the caller treats that as a cache
  * miss and falls back to a live fetch.
  */
 export function readModelCache(
-  baseURL: string,
+  cacheKey: string,
 ): Record<string, unknown> | null {
   try {
-    const raw = readFileSync(cacheFile(baseURL), 'utf8')
+    const raw = readFileSync(cacheFile(cacheKey), 'utf8')
     const parsed = JSON.parse(raw) as ModelCacheFile
     if (parsed.version !== CACHE_VERSION) return null
     if (!parsed.models || typeof parsed.models !== 'object') return null
@@ -70,13 +74,13 @@ export function readModelCache(
 }
 
 /**
- * Return the `savedAt` timestamp (epoch ms) of a baseURL's cache entry,
- * or `null` if there's no readable/valid cache. Used to throttle
+ * Return the `savedAt` timestamp (epoch ms) of a cache entry, or
+ * `null` if there's no readable/valid cache. Used to throttle
  * background refreshes so still-fresh caches aren't re-fetched.
  */
-export function readModelCacheSavedAt(baseURL: string): number | null {
+export function readModelCacheSavedAt(cacheKey: string): number | null {
   try {
-    const raw = readFileSync(cacheFile(baseURL), 'utf8')
+    const raw = readFileSync(cacheFile(cacheKey), 'utf8')
     const parsed = JSON.parse(raw) as ModelCacheFile
     if (parsed.version !== CACHE_VERSION) return null
     if (typeof parsed.savedAt !== 'number') return null
@@ -87,11 +91,11 @@ export function readModelCacheSavedAt(baseURL: string): number | null {
 }
 
 /**
- * Persist model entries for a baseURL. Best-effort: never throws, so a
- * read-only or full filesystem can't break discovery.
+ * Persist model entries for a cache key. Best-effort: never throws, so
+ * a read-only or full filesystem can't break discovery.
  */
 export function writeModelCache(
-  baseURL: string,
+  cacheKey: string,
   models: Record<string, unknown>,
 ): void {
   try {
@@ -104,7 +108,7 @@ export function writeModelCache(
     // Write to a temp file and rename so concurrent OpenCode processes
     // never observe a partially-written JSON file (rename is atomic on
     // the same filesystem).
-    const target = cacheFile(baseURL)
+    const target = cacheFile(cacheKey)
     const tmp = `${target}.${process.pid}.tmp`
     try {
       writeFileSync(tmp, JSON.stringify(payload), 'utf8')
