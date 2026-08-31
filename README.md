@@ -316,7 +316,12 @@ Yes. Set `provider.litellm.options.baseURL` to your remote URL and (optionally) 
 <details>
 <summary><b>What happens if LiteLLM is offline at startup?</b></summary>
 
-The plugin logs a warning and is a no-op. OpenCode starts normally; you just won't see LiteLLM-discovered models until you restart with the proxy up.
+OpenCode starts normally either way. With a warm on-disk cache, the
+previously discovered models are served from the cache — no network call —
+so the picker works as usual; only the background refresh is skipped until
+the proxy is back. With a cold cache (first run, or after the 7-day expiry),
+the plugin logs a warning and you won't see LiteLLM-discovered models until
+the proxy is reachable again.
 </details>
 
 <details>
