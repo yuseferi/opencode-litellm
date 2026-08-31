@@ -1,3 +1,85 @@
+# [1.0.0](https://github.com/yuseferi/opencode-litellm/compare/v0.11.1...v1.0.0) (2026-08-31)
+
+
+### Bug Fixes
+
+* discovery improvements, dead-code removal, tests, and docs alignment ([#24](https://github.com/yuseferi/opencode-litellm/issues/24)) ([3041692](https://github.com/yuseferi/opencode-litellm/commit/30416924b040cb246f28dad1e05d8ae7bb9cd961))
+
+
+### BREAKING CHANGES
+
+* remove previously exported but dead public types
+(`Transport`, `TransportPolicy`, `LiteLLMOptions`, `ModelType`). No
+behavior change — the config-hook plugin is untouched.
+
+* test: add vitest suite and run it in CI
+
+Cover the pure logic that regresses silently: model-name formatting
+(including version-pair/date-stamp edge cases), model categorization,
+base-URL normalization, and the SWR disk cache (round-trip, per-key
+isolation, version mismatch, max-age expiry). Tests live in `test/`
+so they stay out of the published tarball. CI now runs `npm test`
+alongside typecheck on Node 20/22.
+
+* docs: align README and CONTRIBUTING with current behavior
+
+The README still documented the dual-provider architecture removed in
+0.5.0: the `litellm-responses` sibling provider, `transport` /
+`responsesApiModels` / `chatApiModels` options, transport bucketing in
+the How-it-works diagram, and `organizationOwner` extraction — none of
+which the config-hook plugin does. The FAQ even pointed users at
+`responsesApiModels` to fix a reasoning_effort error, which silently
+did nothing.
+
+Rewrite those sections around the actual single-provider + SWR-cache
+flow, fix the naming example ("Claude 3.5 Sonnet"), document the cache
+and background refresh, trim shipped items from the roadmap, update the
+source tree, drop the redundant quickstart install step, and fix the
+plugin log path in CONTRIBUTING.
+
+* fix: use OpenCode's snake_case cache cost field names
+
+The config schema at opencode.ai/config.json defines the model cost
+object as { input, output, cache_read, cache_write }; the camelCase
+cacheRead/cacheWrite keys emitted previously would be silently ignored.
+
+* docs: correct offline-proxy FAQ about warm-cache behavior
+
+A warm on-disk cache is served without any network call, so discovered
+models keep working when the proxy is down; the old answer described
+pre-cache behavior.
+
+* test: restore original XDG_CACHE_HOME after cache tests
+
+* docs: add architecture banner to README
+
+Hand-crafted SVG showing the config-hook flow: OpenCode -> plugin
+(discover/merge/cache) -> LiteLLM proxy -> upstream providers, plus the
+SWR disk cache. Dark, crisp at any size, and no diagram tooling to
+maintain.
+
+* fix: scope in-memory discovery state by provider cache key
+
+Key refreshContexts, refreshInFlight, and injectedModelIds by
+`providerId@baseURL` instead of the bare baseURL, so two providers
+pointing at the same proxy (with different keys) can no longer
+suppress each other's model injection or reuse the wrong refresh
+context.
+
+* fix: refuse version-pair merges inside numeric runs
+
+`model-1-2-3` previously rendered as "Model 1 2.3" because only the
+token after the pair was checked. Also refuse the merge when the
+token immediately before it is a short number, keeping numeric runs
+like `1-2-3` unmerged.
+
+* docs: correct health-check placement in sequence diagram
+
+With a configured baseURL the proxy is not contacted during startup
+unless the cache is cold — the only 3 s fail-fast health check is the
+port probe during auto-detection. Move the contact point below the
+cache read so the diagram matches the SWR fast path.
+
 ## [0.11.1](https://github.com/yuseferi/opencode-litellm/compare/v0.11.0...v0.11.1) (2026-08-29)
 
 
