@@ -38,19 +38,26 @@ function looksLikeVersionComponent(token: string): boolean {
  *     so a `YYYYMMDD` revision stamp like `20251101` is never merged
  *     into a version number itself.
  *   - We refuse to collapse if the token immediately AFTER the pair is
- *     also a short number (would create ambiguity in `1-2-3` runs). A
- *     trailing 6–8 digit `YYYYMMDD` revision stamp does not block the
- *     merge — it stays its own token, so `claude-opus-4-5-20251101`
- *     renders "Claude Opus 4.5 20251101", not "Claude Opus 4 5 20251101".
+ *     also a short number, or if the token immediately BEFORE it is one
+ *     too — both signal an ambiguous numeric run (`1-2-3`) rather than
+ *     a version pair. A trailing 6–8 digit `YYYYMMDD` revision stamp
+ *     does not block the merge — it stays its own token, so
+ *     `claude-opus-4-5-20251101` renders "Claude Opus 4.5 20251101",
+ *     not "Claude Opus 4 5 20251101".
  */
 function joinTrailingVersionPair(tokens: string[]): string[] {
   for (let i = tokens.length - 1; i >= 1; i--) {
     const a = tokens[i - 1]
     const b = tokens[i]
     if (looksLikeVersionComponent(a) && looksLikeVersionComponent(b)) {
+      const prev = tokens[i - 2]
       const next = tokens[i + 1]
+      const prevIsShortNumeric = prev !== undefined && looksLikeVersionComponent(prev)
       const nextIsDateStamp = next !== undefined && /^\d{6,8}$/.test(next)
-      if (next === undefined || nextIsDateStamp || !/^\d+$/.test(next)) {
+      if (
+        !prevIsShortNumeric &&
+        (next === undefined || nextIsDateStamp || !/^\d+$/.test(next))
+      ) {
         const merged = [...tokens.slice(0, i - 1), `${a}.${b}`, ...tokens.slice(i + 1)]
         return merged
       }

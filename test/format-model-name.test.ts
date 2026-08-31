@@ -30,6 +30,8 @@ describe('formatModelName', () => {
   it('does not merge version pairs inside longer numeric runs', () => {
     // `turbo` separates the pair; trailing `16k` is a size token.
     expect(formatModelName(model('gpt-3-5-turbo-16k'))).toBe('GPT 3.5 Turbo 16K')
+    // A short number before the pair also blocks the merge.
+    expect(formatModelName(model('model-1-2-3'))).toBe('Model 1 2 3')
   })
 
   it('keeps a provider-prefixed vendor name in the display', () => {
