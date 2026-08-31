@@ -21,6 +21,8 @@
 Auto-detect a running LiteLLM proxy, pull every model from `/v1/models`, and register them in OpenCode.
 **No model lists to hand-maintain. No restart loops. No surprises.**
 
+<img src="https://raw.githubusercontent.com/yuseferi/opencode-litellm/main/assets/architecture.svg" alt="How opencode-litellm works: OpenCode loads models through the config hook, the plugin discovers them from the LiteLLM proxy and caches them on disk for instant startup" width="100%" />
+
 [Quickstart](#-quickstart) · [Configuration](#%EF%B8%8F-configuration) · [How it works](#-how-it-works) · [FAQ](#-faq) · [Contributing](./CONTRIBUTING.md)
 
 </div>

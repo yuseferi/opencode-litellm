@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-label="Architecture: OpenCode loads models via the opencode-litellm config hook, which discovers them from the LiteLLM proxy and caches them on disk">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#101831"/>
+      <stop offset="1" stop-color="#090D1A"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5B6B85"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="420" rx="24" fill="url(#bg)"/>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+
+    <!-- OpenCode box -->
+    <rect x="64" y="64" width="260" height="118" rx="14" fill="#1B1637" stroke="#7C5CFF" stroke-width="2"/>
+    <text x="194" y="118" text-anchor="middle" font-size="26" font-weight="700" fill="#EDE9FE">OpenCode</text>
+    <text x="194" y="150" text-anchor="middle" font-size="15" fill="#A79DD8">model picker</text>
+
+    <!-- Plugin box -->
+    <rect x="470" y="64" width="260" height="118" rx="14" fill="#182449" stroke="#F8FAFC" stroke-width="2.5"/>
+    <text x="600" y="112" text-anchor="middle" font-size="24" font-weight="700" fill="#FFFFFF">opencode-litellm</text>
+    <text x="600" y="142" text-anchor="middle" font-size="15" fill="#9FB0D9">discover · merge · cache</text>
+    <text x="600" y="163" text-anchor="middle" font-size="13" fill="#66799F">config hook · SWR</text>
+
+    <!-- LiteLLM box -->
+    <rect x="876" y="64" width="260" height="118" rx="14" fill="#0D2B36" stroke="#22D3EE" stroke-width="2"/>
+    <text x="1006" y="112" text-anchor="middle" font-size="24" font-weight="700" fill="#ECFEFF">LiteLLM proxy</text>
+    <text x="1006" y="142" text-anchor="middle" font-size="14" fill="#7FC9D8">:4000 · :8000 · :8080 auto-detect</text>
+    <text x="1006" y="163" text-anchor="middle" font-size="13" fill="#54838F">/v1/models · /v1/model/info</text>
+
+    <!-- Top row arrows -->
+    <line x1="324" y1="123" x2="462" y2="123" stroke="#5B6B85" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="397" y="112" text-anchor="middle" font-size="15" fill="#8CA0BE">config hook</text>
+
+    <line x1="730" y1="123" x2="868" y2="123" stroke="#5B6B85" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="803" y="112" text-anchor="middle" font-size="15" fill="#8CA0BE">discovery</text>
+
+    <!-- Plugin <-> cache -->
+    <line x1="600" y1="190" x2="600" y2="292" stroke="#5B6B85" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <text x="614" y="246" font-size="13.5" fill="#8CA0BE">read / write</text>
+
+    <!-- Cache cylinder -->
+    <path d="M 520 310 a 80 12 0 0 0 160 0 v 52 a 80 12 0 0 1 -160 0 z" fill="#27200F" stroke="#F59E0B" stroke-width="2"/>
+    <ellipse cx="600" cy="310" rx="80" ry="12" fill="#332A12" stroke="#F59E0B" stroke-width="2"/>
+    <text x="600" y="352" text-anchor="middle" font-size="15" font-weight="600" fill="#FEF3C7">disk cache (SWR)</text>
+    <text x="600" y="398" text-anchor="middle" font-size="12.5" fill="#64748B">instant startup · refresh on new sessions</text>
+
+    <!-- LiteLLM -> providers -->
+    <line x1="1006" y1="190" x2="1006" y2="292" stroke="#5B6B85" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="1020" y="246" font-size="13.5" fill="#8CA0BE">chat completions</text>
+
+    <!-- Upstream providers bar -->
+    <rect x="800" y="300" width="336" height="84" rx="14" fill="#101A2E" stroke="#3E4C63" stroke-width="2"/>
+    <text x="968" y="336" text-anchor="middle" font-size="16" font-weight="600" fill="#CBD5E1">upstream providers</text>
+    <text x="968" y="362" text-anchor="middle" font-size="13.5" fill="#7C8AA5">OpenAI · Anthropic · Bedrock · Ollama · …</text>
+
+    <!-- Footer -->
+    <text x="64" y="398" font-size="14" fill="#64748B">zero config · zero runtime deps · no restart loops</text>
+    <text x="1136" y="398" text-anchor="end" font-size="13" fill="#475569">opencode-litellm</text>
+  </g>
+</svg>
