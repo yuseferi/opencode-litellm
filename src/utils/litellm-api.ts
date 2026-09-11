@@ -1,4 +1,5 @@
 import type { LiteLLMModel, LiteLLMModelInfo, LiteLLMModelInfoResponse, LiteLLMModelsResponse } from '../types'
+import { CAPABILITY_FLAGS } from './model-capabilities'
 
 export const DEFAULT_LITELLM_URL = 'http://localhost:4000'
 const MODELS_ENDPOINT = '/v1/models'
@@ -128,14 +129,7 @@ export async function discoverLiteLLMModelInfo(
     // Some deployments set capability flags on the params block rather
     // than inside model_info. Fill those gaps so enrichment sees them.
     const info: LiteLLMModelInfo = { ...entry.model_info }
-    const capabilityFlags = [
-      'supports_vision',
-      'supports_function_calling',
-      'supports_reasoning',
-      'supports_pdf_input',
-      'supports_audio_input',
-    ] as const
-    for (const flag of capabilityFlags) {
+    for (const flag of CAPABILITY_FLAGS) {
       const paramsValue = entry.litellm_params?.[flag]
       if (info[flag] == null && typeof paramsValue === 'boolean') {
         info[flag] = paramsValue

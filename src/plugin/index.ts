@@ -16,6 +16,8 @@ import { getOpenCodeStoredApiKey } from '../utils/opencode-auth'
 import { readModelCache, writeModelCache, readModelCacheSavedAt } from '../utils/model-cache'
 import { passesModelFilter } from '../utils/model-filter'
 import type { ModelFilters } from '../utils/model-filter'
+import { applyCapabilityOverrides, parseModelCapabilities } from '../utils/model-capabilities'
+import type { ModelCapabilities } from '../utils/model-capabilities'
 
 const CHAT_PROVIDER_ID = 'litellm'
 // Covers the 3 s health check plus the parallel models/model-info fetch
@@ -73,6 +75,7 @@ interface RefreshContext {
   apiKey?: string
   customHeaders?: Record<string, string>
   filters: ModelFilters
+  capabilities: ModelCapabilities
   providerId: string
 }
 const refreshContexts = new Map<string, RefreshContext>()
@@ -149,29 +152,40 @@ function readModelFilters(options: Record<string, unknown>): ModelFilters {
 }
 
 /**
- * Overlay metadata from `/v1/model/info` onto a `/v1/models` entry.
- * Fields already present on the lean entry win; the info block only
- * fills gaps (notably `mode`, which `/v1/models` omits for
- * database-defined models).
+ * Overlay metadata onto a `/v1/models` entry in three tiers: the entry's
+ * own fields win, `/v1/model/info` fills gaps (notably `mode`, which
+ * `/v1/models` omits for database-defined models), and finally
+ * user-configured `modelCapabilities` overrides apply — explicit
+ * `false` included — because the user knows their deployment better
+ * than either endpoint (issue #25).
  */
-function enrichModel(model: LiteLLMModel, info: LiteLLMModelInfo): LiteLLMModel {
-  return {
-    ...model,
-    mode: model.mode ?? info.mode,
-    max_tokens: model.max_tokens ?? info.max_tokens,
-    max_input_tokens: model.max_input_tokens ?? info.max_input_tokens,
-    max_output_tokens: model.max_output_tokens ?? info.max_output_tokens,
-    supports_function_calling: model.supports_function_calling ?? info.supports_function_calling,
-    supports_vision: model.supports_vision ?? info.supports_vision,
-    supports_reasoning: model.supports_reasoning ?? info.supports_reasoning,
-    supports_pdf_input: model.supports_pdf_input ?? info.supports_pdf_input,
-    supports_audio_input: model.supports_audio_input ?? info.supports_audio_input,
-    input_cost_per_token: model.input_cost_per_token ?? info.input_cost_per_token,
-    output_cost_per_token: model.output_cost_per_token ?? info.output_cost_per_token,
-    cache_read_input_token_cost: model.cache_read_input_token_cost ?? info.cache_read_input_token_cost,
-    cache_creation_input_token_cost:
-      model.cache_creation_input_token_cost ?? info.cache_creation_input_token_cost,
-  }
+function enrichModel(
+  model: LiteLLMModel,
+  info: LiteLLMModelInfo | undefined,
+  overrides?: Record<string, boolean>,
+): LiteLLMModel {
+  return applyCapabilityOverrides(
+    {
+      ...model,
+      mode: model.mode ?? info?.mode,
+      max_tokens: model.max_tokens ?? info?.max_tokens,
+      max_input_tokens: model.max_input_tokens ?? info?.max_input_tokens,
+      max_output_tokens: model.max_output_tokens ?? info?.max_output_tokens,
+      supports_function_calling:
+        model.supports_function_calling ?? info?.supports_function_calling,
+      supports_vision: model.supports_vision ?? info?.supports_vision,
+      supports_reasoning: model.supports_reasoning ?? info?.supports_reasoning,
+      supports_pdf_input: model.supports_pdf_input ?? info?.supports_pdf_input,
+      supports_audio_input: model.supports_audio_input ?? info?.supports_audio_input,
+      input_cost_per_token: model.input_cost_per_token ?? info?.input_cost_per_token,
+      output_cost_per_token: model.output_cost_per_token ?? info?.output_cost_per_token,
+      cache_read_input_token_cost:
+        model.cache_read_input_token_cost ?? info?.cache_read_input_token_cost,
+      cache_creation_input_token_cost:
+        model.cache_creation_input_token_cost ?? info?.cache_creation_input_token_cost,
+    },
+    overrides,
+  )
 }
 
 /**
@@ -258,10 +272,10 @@ function toConfigModel(
  *
  * Pure with respect to plugin config: it performs the network calls,
  * classifies + formats each model, and returns a `{ id -> entry }` map.
- * The provider's `includeModels`/`excludeModels` filters are applied
- * here (not at merge time) so every path that persists or serves a
- * cache — cold discovery and background refresh — writes the same
- * filtered view.
+ * The provider's `includeModels`/`excludeModels` filters and
+ * `modelCapabilities` overrides are applied here (not at merge time) so
+ * every path that persists or serves a cache — cold discovery and
+ * background refresh — writes the same adjusted view.
  *
  * Returns `null` when the proxy is unreachable/unauthorized or exposes
  * no models, so callers can distinguish "no data" from "empty result".
@@ -272,6 +286,7 @@ async function discoverModels(
   customHeaders: Record<string, string> | undefined,
   providerId: string,
   filters: ModelFilters = {},
+  capabilities: ModelCapabilities = {},
 ): Promise<Record<string, unknown> | null> {
   if (!(await checkLiteLLMHealth(baseURL, apiKey, customHeaders))) {
     log(
@@ -343,7 +358,7 @@ async function discoverModels(
     }
     const info = infoByName?.get(model.id)
     if (infoByName && !info) unmatched.push(model.id)
-    const entry = toConfigModel(info ? enrichModel(model, info) : model, info)
+    const entry = toConfigModel(enrichModel(model, info, capabilities[model.id]), info)
     if (!entry) {
       skipped++
       continue
@@ -424,7 +439,14 @@ async function backgroundRefresh(cacheKey: string): Promise<void> {
   refreshInFlight.add(cacheKey)
   try {
     const built = await withTimeout(
-      discoverModels(ctx.baseURL, ctx.apiKey, ctx.customHeaders, ctx.providerId, ctx.filters),
+      discoverModels(
+        ctx.baseURL,
+        ctx.apiKey,
+        ctx.customHeaders,
+        ctx.providerId,
+        ctx.filters,
+        ctx.capabilities,
+      ),
       DISCOVERY_TIMEOUT_MS,
     )
     if (built && Object.keys(built).length > 0) {
@@ -525,6 +547,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         const apiKey = configuredKey ?? envKey ?? storedKey
         const customHeaders = readCustomHeaders(options)
         const filters = readModelFilters(options)
+        const capabilities = parseModelCapabilities(options.modelCapabilities)
 
         // Resolve base URL
         let baseURL: string | null = null
@@ -584,7 +607,14 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
 
         // Remember how to reach this proxy so the `event` hook can
         // revalidate its cache in the background on new sessions.
-        refreshContexts.set(cacheKey, { baseURL, apiKey, customHeaders, filters, providerId })
+        refreshContexts.set(cacheKey, {
+          baseURL,
+          apiKey,
+          customHeaders,
+          filters,
+          capabilities,
+          providerId,
+        })
 
         // Repeat config-hook invocations within a run are a no-op once
         // we've injected this provider's models.
@@ -616,7 +646,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         // persist for subsequent startups. Capped by a timeout so a slow
         // proxy never blocks boot.
         const built = await withTimeout(
-          discoverModels(baseURL, apiKey, customHeaders, providerId, filters),
+          discoverModels(baseURL, apiKey, customHeaders, providerId, filters, capabilities),
           DISCOVERY_TIMEOUT_MS,
         )
         if (built && Object.keys(built).length > 0) {

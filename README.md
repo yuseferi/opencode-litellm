@@ -78,6 +78,7 @@ opencode
 | 🔐 **Auth-aware** | Honours `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` env vars, `provider.litellm.options.apiKey`, or the key you stored via OpenCode's `/connect`. |
 | 🌐 **Gateway-friendly** | Supports `customHeaders` for proxies behind Cloudflare Access or other API gateways requiring extra HTTP headers. |
 | 🧩 **Splittable catalog** | `includeModels` / `excludeModels` (glob patterns) let one LiteLLM proxy be divided into several OpenCode providers — e.g. by naming prefix — without hand-maintaining a model list. |
+| 🎚️ **Capability overrides** | `modelCapabilities` forces or retracts per-model capability flags (`supports_vision`, `supports_function_calling`, …) when `/v1/model/info` is unavailable or disagrees with your deployment. |
 | ⏱️ **Non-blocking startup** | Health checks fail fast (3 s); discovery fetches are capped at **15 s** (configurable via `LITELLM_REQUEST_TIMEOUT_MS`) for slow remote proxies. Repeat config-hook invocations are a no-op. |
 | 📝 **TUI-safe logging** | All plugin logs go through OpenCode's log API (into OpenCode's own log files), never to stdout — the TUI stays intact. |
 | 🤝 **Non-destructive merge** | Only adds models you don't already have configured. Hand-curated entries are preserved verbatim. |
@@ -280,6 +281,30 @@ If your LiteLLM catalog mixes naming conventions from different teams or environ
 - Patterns support only `*` (any run of characters); everything else is matched literally, so dots in ids like `gpt-4.1` need no escaping.
 - Filtering happens before the on-disk cache is written, so each provider's cached view respects its own filters.
 
+### Correcting capability flags (`modelCapabilities`)
+
+Model classification (tool-call badge, attachments, reasoning, input modalities) leans on the capability flags LiteLLM reports via `/v1/model/info`. If your proxy doesn't expose that endpoint, or reports a flag that doesn't match your deployment, override flags per model id:
+
+```jsonc
+{
+  "provider": {
+    "litellm": {
+      "options": {
+        "baseURL": "http://localhost:4000/v1",
+        "modelCapabilities": {
+          "te-gpt-5.4-mini": { "supports_function_calling": true },
+          "openai/gpt-4o": { "supports_vision": false }
+        }
+      }
+    }
+  }
+}
+```
+
+- Overrides apply on top of whatever the proxy reports, with an explicit `false` winning — a flag the proxy never reported can be forced on just the same.
+- Keys are exact model ids as they appear in `/v1/models` (not globs).
+- Overridden flags flow into the picker exactly like natively reported ones, and the adjusted view is what gets persisted to the model cache.
+
 ## 🔧 How it works
 
 ```mermaid
@@ -444,9 +469,11 @@ src/
 │   ├── litellm-api.ts          # health check, discovery (/v1/models + /v1/model/info), auto-detect
 │   ├── format-model-name.ts    # name formatting, categorization
 │   ├── model-cache.ts          # stale-while-revalidate on-disk model cache
+│   ├── model-filter.ts         # includeModels/excludeModels glob filtering
+│   ├── model-capabilities.ts   # per-model capability flag overrides
 │   └── opencode-auth.ts        # fallback to OpenCode's /connect-stored credentials
 └── plugin/
-    └── index.ts                # LiteLLMPlugin entry (config hook, enrichment, filtering)
+    └── index.ts                # LiteLLMPlugin entry (config hook, enrichment, filtering, capability overrides)
 
 test/                           # vitest suite for the pure logic
 ```
