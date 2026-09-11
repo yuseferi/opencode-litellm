@@ -1,0 +1,19 @@
+src/utils/index.ts
+  s_a1e6e7fb54c8f1::t_f23703e2942773 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "991f1fbd58e5aa2410f77a443fd527aa9e8fa98d",
+  "prompts": {},
+  "sessions": {
+    "s_a1e6e7fb54c8f1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f96f6a58affegb7UWBI6nf2hw0",
+        "model": "muse-spark-1.3-contributor-free"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
