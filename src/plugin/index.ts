@@ -14,6 +14,8 @@ import {
 import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
 import { getOpenCodeStoredApiKey } from '../utils/opencode-auth'
 import { readModelCache, writeModelCache, readModelCacheSavedAt } from '../utils/model-cache'
+import { passesModelFilter } from '../utils/model-filter'
+import type { ModelFilters } from '../utils/model-filter'
 
 const CHAT_PROVIDER_ID = 'litellm'
 // Covers the 3 s health check plus the parallel models/model-info fetch
@@ -70,6 +72,7 @@ interface RefreshContext {
   baseURL: string
   apiKey?: string
   customHeaders?: Record<string, string>
+  filters: ModelFilters
   providerId: string
 }
 const refreshContexts = new Map<string, RefreshContext>()
@@ -125,6 +128,24 @@ function readCustomHeaders(
     return Object.keys(out).length > 0 ? out : undefined
   }
   return undefined
+}
+
+/**
+ * Read the `includeModels`/`excludeModels` glob filters from a provider
+ * options block (issue #21's feature: split one proxy's catalog across
+ * several OpenCode providers). Non-string entries are dropped; an empty
+ * result means "don't filter".
+ */
+function readModelFilters(options: Record<string, unknown>): ModelFilters {
+  const readPatterns = (raw: unknown): string[] | undefined => {
+    if (!Array.isArray(raw)) return undefined
+    const out = raw.filter((v): v is string => typeof v === 'string')
+    return out.length > 0 ? out : undefined
+  }
+  return {
+    includeModels: readPatterns(options.includeModels),
+    excludeModels: readPatterns(options.excludeModels),
+  }
 }
 
 /**
@@ -237,6 +258,11 @@ function toConfigModel(
  *
  * Pure with respect to plugin config: it performs the network calls,
  * classifies + formats each model, and returns a `{ id -> entry }` map.
+ * The provider's `includeModels`/`excludeModels` filters are applied
+ * here (not at merge time) so every path that persists or serves a
+ * cache — cold discovery and background refresh — writes the same
+ * filtered view.
+ *
  * Returns `null` when the proxy is unreachable/unauthorized or exposes
  * no models, so callers can distinguish "no data" from "empty result".
  */
@@ -245,6 +271,7 @@ async function discoverModels(
   apiKey: string | undefined,
   customHeaders: Record<string, string> | undefined,
   providerId: string,
+  filters: ModelFilters = {},
 ): Promise<Record<string, unknown> | null> {
   if (!(await checkLiteLLMHealth(baseURL, apiKey, customHeaders))) {
     log(
@@ -297,6 +324,7 @@ async function discoverModels(
   const built: Record<string, unknown> = {}
   let skipped = 0
   let wildcards = 0
+  let filtered = 0
   const unmatched: string[] = []
   for (const model of discovered) {
     // `deepseek/*` is an access rule, not a callable model. But a
@@ -304,6 +332,13 @@ async function discoverModels(
     // so only skip the `provider/*` form.
     if (model.id.includes('/*')) {
       wildcards++
+      continue
+    }
+    // `includeModels`/`excludeModels` let one LiteLLM proxy be split
+    // across several OpenCode providers (e.g. by upstream naming
+    // prefix) without hand-maintaining a model list.
+    if (!passesModelFilter(model.id, filters.includeModels, filters.excludeModels)) {
+      filtered++
       continue
     }
     const info = infoByName?.get(model.id)
@@ -325,12 +360,23 @@ async function discoverModels(
     )
   }
 
+  // Only blame the filters when every non-wildcard model was rejected by
+  // them — if some hit `skipped` (non-chat) instead, `built` being empty
+  // has an unrelated cause and this warning would misdirect the user.
+  if (filtered > 0 && filtered + wildcards === discovered.length) {
+    log(
+      'warn',
+      `[opencode-litellm] includeModels/excludeModels filtered out all ${filtered} model(s) discovered for provider "${providerId}" — check the glob patterns in options.includeModels/options.excludeModels.`,
+    )
+  }
+
   log(
     'info',
     `[opencode-litellm] Discovered ${discovered.length} models for provider "${providerId}" from ${baseURL} ` +
       `(${Object.keys(built).length} built` +
       (skipped > 0 ? `, ${skipped} non-chat hidden` : '') +
       (wildcards > 0 ? `, ${wildcards} wildcard ignored` : '') +
+      (filtered > 0 ? `, ${filtered} filtered by includeModels/excludeModels` : '') +
       ')',
   )
 
@@ -378,7 +424,7 @@ async function backgroundRefresh(cacheKey: string): Promise<void> {
   refreshInFlight.add(cacheKey)
   try {
     const built = await withTimeout(
-      discoverModels(ctx.baseURL, ctx.apiKey, ctx.customHeaders, ctx.providerId),
+      discoverModels(ctx.baseURL, ctx.apiKey, ctx.customHeaders, ctx.providerId, ctx.filters),
       DISCOVERY_TIMEOUT_MS,
     )
     if (built && Object.keys(built).length > 0) {
@@ -478,6 +524,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         const storedKey = await getOpenCodeStoredApiKey(providerId)
         const apiKey = configuredKey ?? envKey ?? storedKey
         const customHeaders = readCustomHeaders(options)
+        const filters = readModelFilters(options)
 
         // Resolve base URL
         let baseURL: string | null = null
@@ -537,7 +584,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
 
         // Remember how to reach this proxy so the `event` hook can
         // revalidate its cache in the background on new sessions.
-        refreshContexts.set(cacheKey, { baseURL, apiKey, customHeaders, providerId })
+        refreshContexts.set(cacheKey, { baseURL, apiKey, customHeaders, filters, providerId })
 
         // Repeat config-hook invocations within a run are a no-op once
         // we've injected this provider's models.
@@ -569,7 +616,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         // persist for subsequent startups. Capped by a timeout so a slow
         // proxy never blocks boot.
         const built = await withTimeout(
-          discoverModels(baseURL, apiKey, customHeaders, providerId),
+          discoverModels(baseURL, apiKey, customHeaders, providerId, filters),
           DISCOVERY_TIMEOUT_MS,
         )
         if (built && Object.keys(built).length > 0) {
