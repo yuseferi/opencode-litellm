@@ -19,7 +19,9 @@ const DEFAULT_FETCH_TIMEOUT_MS = 15000
 export function getRequestTimeoutMs(): number {
   const raw = process.env.LITELLM_REQUEST_TIMEOUT_MS
   if (!raw) return DEFAULT_FETCH_TIMEOUT_MS
-  const parsed = Number.parseInt(raw, 10)
+  // Number() (not parseInt) so '12.5' or '60abc' fall back to the
+  // default instead of silently truncating to a bogus 12 ms timeout.
+  const parsed = Number(raw)
   if (!Number.isInteger(parsed) || parsed <= 0) return DEFAULT_FETCH_TIMEOUT_MS
   return parsed
 }
