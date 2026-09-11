@@ -1,5 +1,29 @@
-import { describe, expect, it } from 'vitest'
-import { buildAPIURL, normalizeBaseURL } from '../src/utils/litellm-api'
+import { afterEach, describe, expect, it } from 'vitest'
+import { buildAPIURL, getRequestTimeoutMs, normalizeBaseURL } from '../src/utils/litellm-api'
+
+const TIMEOUT_ENV = 'LITELLM_REQUEST_TIMEOUT_MS'
+
+afterEach(() => {
+  delete process.env[TIMEOUT_ENV]
+})
+
+describe('getRequestTimeoutMs', () => {
+  it('defaults to 15000ms when the env var is unset', () => {
+    expect(getRequestTimeoutMs()).toBe(15000)
+  })
+
+  it('honours a valid override (issue #20)', () => {
+    process.env[TIMEOUT_ENV] = '60000'
+    expect(getRequestTimeoutMs()).toBe(60000)
+  })
+
+  it('falls back to the default for invalid values', () => {
+    for (const invalid of ['abc', '0', '-5', '12.5', '']) {
+      process.env[TIMEOUT_ENV] = invalid
+      expect(getRequestTimeoutMs()).toBe(15000)
+    }
+  })
+})
 
 describe('normalizeBaseURL', () => {
   it('strips trailing slashes', () => {
