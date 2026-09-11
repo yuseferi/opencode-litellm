@@ -77,7 +77,8 @@ opencode
 | 🧩 **Reasoning-effort variants** | When LiteLLM reports per-model effort support (`supports_low_reasoning_effort`, …), the plugin surfaces each level as a picker variant automatically. |
 | 🔐 **Auth-aware** | Honours `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` env vars, `provider.litellm.options.apiKey`, or the key you stored via OpenCode's `/connect`. |
 | 🌐 **Gateway-friendly** | Supports `customHeaders` for proxies behind Cloudflare Access or other API gateways requiring extra HTTP headers. |
-| ⏱️ **Non-blocking startup** | Health checks fail fast (3 s); discovery fetches are capped at **15 s** for slow remote proxies. Repeat config-hook invocations are a no-op. |
+| ⏱️ **Non-blocking startup** | Health checks fail fast (3 s); discovery fetches are capped at **15 s** (configurable via `LITELLM_REQUEST_TIMEOUT_MS`) for slow remote proxies. Repeat config-hook invocations are a no-op. |
+| 📝 **TUI-safe logging** | All plugin logs go through OpenCode's log API (into OpenCode's own log files), never to stdout — the TUI stays intact. |
 | 🤝 **Non-destructive merge** | Only adds models you don't already have configured. Hand-curated entries are preserved verbatim. |
 | 🪶 **Zero runtime deps** | Only depends on `@opencode-ai/plugin`. No build step, no bundler. |
 | 🔒 **TypeScript strict** | Strict-mode compiled, fully typed public API. |
@@ -211,6 +212,16 @@ If your LiteLLM proxy requires a master key, expose it via either approach:
 | OpenCode `/connect` | Run `/connect`, search for your `litellm` provider entry, and paste the key |
 
 The env var path lets you commit `opencode.json` without leaking secrets. The `/connect` path is useful when you'd rather manage the credential through OpenCode's own auth store (`~/.local/share/opencode/auth.json`) instead of an env var or config file — the plugin reads that file as a fallback and applies the stored key to its own health-check, model-discovery, and completion-time provider requests, so a key-only proxy works end to end.
+
+### Slow proxies (`LITELLM_REQUEST_TIMEOUT_MS`)
+
+Each discovery request (`/v1/models`, `/v1/model/info`) is capped at 15 s by default. Proxies with many database-defined models — or a gateway in front of LiteLLM — can legitimately take longer. Raise the budget with:
+
+```bash
+export LITELLM_REQUEST_TIMEOUT_MS=60000
+```
+
+The overall discovery cap scales with it (max of 20 s and the request timeout + 5 s), so a slow proxy never blocks startup indefinitely but isn't cut off mid-flight either. Invalid values fall back to the default.
 
 ### Custom headers (Cloudflare Access, API gateways)
 

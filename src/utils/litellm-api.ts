@@ -8,7 +8,21 @@ const MODEL_INFO_ENDPOINT = '/v1/model/info'
 // payloads from remote proxies with many database-defined models can
 // be large and slow to generate.
 const HEALTH_TIMEOUT_MS = 3000
-const FETCH_TIMEOUT_MS = 15000
+const DEFAULT_FETCH_TIMEOUT_MS = 15000
+
+/**
+ * Per-request timeout for discovery fetches (`/v1/models`,
+ * `/v1/model/info`), overridable via `LITELLM_REQUEST_TIMEOUT_MS` for
+ * proxies that legitimately need longer than the 15 s default (issue
+ * #20). Invalid values fall back to the default.
+ */
+export function getRequestTimeoutMs(): number {
+  const raw = process.env.LITELLM_REQUEST_TIMEOUT_MS
+  if (!raw) return DEFAULT_FETCH_TIMEOUT_MS
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isInteger(parsed) || parsed <= 0) return DEFAULT_FETCH_TIMEOUT_MS
+  return parsed
+}
 
 /**
  * Normalise a base URL so the rest of the plugin can rely on a
@@ -72,7 +86,7 @@ export async function discoverLiteLLMModels(
   const response = await fetch(url, {
     method: 'GET',
     headers: buildHeaders(apiKey, customHeaders),
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(getRequestTimeoutMs()),
   })
 
   if (!response.ok) {
@@ -98,7 +112,7 @@ export async function discoverLiteLLMModelInfo(
   const response = await fetch(url, {
     method: 'GET',
     headers: buildHeaders(apiKey, customHeaders),
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(getRequestTimeoutMs()),
   })
 
   if (!response.ok) {

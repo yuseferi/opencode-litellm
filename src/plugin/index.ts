@@ -4,6 +4,7 @@ import {
   checkLiteLLMHealth,
   discoverLiteLLMModelInfo,
   discoverLiteLLMModels,
+  getRequestTimeoutMs,
   normalizeBaseURL,
 } from '../utils/litellm-api'
 import {
@@ -15,9 +16,10 @@ import { getOpenCodeStoredApiKey } from '../utils/opencode-auth'
 import { readModelCache, writeModelCache, readModelCacheSavedAt } from '../utils/model-cache'
 
 const CHAT_PROVIDER_ID = 'litellm'
-// Covers the sequential 3 s health check plus the parallel 15 s
-// models/model-info fetch phase, with headroom.
-const DISCOVERY_TIMEOUT_MS = 20000
+// Covers the 3 s health check plus the parallel models/model-info fetch
+// phase, with headroom. Scales with LITELLM_REQUEST_TIMEOUT_MS so slow
+// proxies aren't cut off by the overall cap either (issue #20).
+const DISCOVERY_TIMEOUT_MS = Math.max(20000, getRequestTimeoutMs() + 5000)
 // Don't revalidate a baseURL's cache more often than this, so a burst
 // of `session.created` events can't generate repeated discovery traffic.
 const REFRESH_MIN_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
