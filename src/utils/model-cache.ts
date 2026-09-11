@@ -48,6 +48,57 @@ function cacheFile(cacheKey: string): string {
 }
 
 /**
+ * Canonical JSON serialization (object keys sorted) so semantically
+ * identical filter/capability configs fingerprint identically no matter
+ * the key order in the user's `opencode.json`.
+ */
+function canonicalize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalize).join(',')}]`
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]) => `${JSON.stringify(k)}:${canonicalize(v)}`)
+    return `{${entries.join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+/**
+ * Cache identity for a provider's model view. `providerId@baseURL`
+ * alone isn't enough: `includeModels`/`excludeModels` and
+ * `modelCapabilities` are baked into cached entries by discovery, so a
+ * config change must not reuse the old cache — it would keep serving
+ * the previous adjusted view until a second restart. A fingerprint is
+ * appended whenever adjustments exist (pattern order ignored); default
+ * configs keep the plain key so existing caches stay warm across
+ * plugin upgrades.
+ */
+export function buildCacheKey(
+  providerId: string,
+  baseURL: string,
+  filters: { includeModels?: string[]; excludeModels?: string[] },
+  capabilities: Record<string, Record<string, boolean>>,
+): string {
+  const base = `${providerId}@${baseURL}`
+  const hasAdjustments =
+    (filters.includeModels?.length ?? 0) > 0 ||
+    (filters.excludeModels?.length ?? 0) > 0 ||
+    Object.keys(capabilities).length > 0
+  if (!hasAdjustments) return base
+  const fingerprint = createHash('sha256')
+    .update(
+      canonicalize({
+        includeModels: filters.includeModels ? [...filters.includeModels].sort() : undefined,
+        excludeModels: filters.excludeModels ? [...filters.excludeModels].sort() : undefined,
+        capabilities,
+      }),
+    )
+    .digest('hex')
+    .slice(0, 12)
+  return `${base}@${fingerprint}`
+}
+
+/**
  * Read cached model entries for a cache key. Returns `null` on any
  * problem (missing file, parse error, version mismatch, or an entry
  * older than `CACHE_MAX_AGE_MS`) — the caller treats that as a cache

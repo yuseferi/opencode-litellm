@@ -13,7 +13,12 @@ import {
 } from '../utils/format-model-name'
 import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
 import { getOpenCodeStoredApiKey } from '../utils/opencode-auth'
-import { readModelCache, writeModelCache, readModelCacheSavedAt } from '../utils/model-cache'
+import {
+  buildCacheKey,
+  readModelCache,
+  writeModelCache,
+  readModelCacheSavedAt,
+} from '../utils/model-cache'
 import { passesModelFilter } from '../utils/model-filter'
 import type { ModelFilters } from '../utils/model-filter'
 import { applyCapabilityOverrides, parseModelCapabilities } from '../utils/model-capabilities'
@@ -603,7 +608,10 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
 
         const models = actualProvider.models as Record<string, unknown>
 
-        const cacheKey = `${providerId}@${baseURL}`
+        // Identity includes the filter/capability config: those are
+        // baked into cached entries, so changing them must start a
+        // fresh discovery instead of serving the old adjusted view.
+        const cacheKey = buildCacheKey(providerId, baseURL, filters, capabilities)
 
         // Remember how to reach this proxy so the `event` hook can
         // revalidate its cache in the background on new sessions.

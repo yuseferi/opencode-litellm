@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { readModelCache, readModelCacheSavedAt, writeModelCache } from '../src/utils/model-cache'
+import { readModelCache, readModelCacheSavedAt, writeModelCache, buildCacheKey } from '../src/utils/model-cache'
 
 const KEY = 'litellm@http://localhost:4000'
 
@@ -81,5 +81,92 @@ describe('model cache', () => {
   it('never leaves temp files behind', () => {
     const dir = join(cacheHome, 'opencode-litellm')
     expect(readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+})
+
+describe('buildCacheKey', () => {
+  it('keeps the plain providerId@baseURL key when no adjustments are configured', () => {
+    expect(buildCacheKey('litellm', 'http://localhost:4000', {}, {})).toBe(KEY)
+    expect(
+      buildCacheKey(
+        'litellm',
+        'http://localhost:4000',
+        { includeModels: undefined, excludeModels: undefined },
+        {},
+      ),
+    ).toBe(KEY)
+  })
+
+  it('changes the key when capability overrides are added or changed', () => {
+    // Regression for the CodeRabbit review finding: a model previously
+    // cached with `supports_vision: false` must not be served again
+    // after the user flips the override to true.
+    const base = 'litellm@http://localhost:4000'
+    const withoutOverrides = buildCacheKey('litellm', 'http://localhost:4000', {}, {})
+    const visionOff = buildCacheKey(
+      'litellm',
+      'http://localhost:4000',
+      {},
+      { 'openai/gpt-4o': { supports_vision: false } },
+    )
+    const visionOn = buildCacheKey(
+      'litellm',
+      'http://localhost:4000',
+      {},
+      { 'openai/gpt-4o': { supports_vision: true } },
+    )
+    expect(visionOff).not.toBe(withoutOverrides)
+    expect(visionOff).not.toBe(visionOn)
+    expect(visionOn.startsWith(base)).toBe(true)
+  })
+
+  it('changes the key when includeModels/excludeModels are added', () => {
+    const plain = buildCacheKey('litellm', 'http://localhost:4000', {}, {})
+    const withFilters = buildCacheKey(
+      'litellm',
+      'http://localhost:4000',
+      { includeModels: ['prod/*'] },
+      {},
+    )
+    const withMore = buildCacheKey(
+      'litellm',
+      'http://localhost:4000',
+      { includeModels: ['prod/*', 'team/*'] },
+      {},
+    )
+    expect(withFilters).not.toBe(plain)
+    expect(withFilters).not.toBe(withMore)
+  })
+
+  it('is stable regardless of config key order', () => {
+    expect(
+      buildCacheKey(
+        'litellm',
+        'http://localhost:4000',
+        {},
+        {
+          'openai/gpt-4o': { supports_vision: true, supports_reasoning: false },
+          'claude-sonnet': { supports_pdf_input: true },
+        },
+      ),
+    ).toBe(
+      buildCacheKey(
+        'litellm',
+        'http://localhost:4000',
+        {},
+        {
+          'claude-sonnet': { supports_pdf_input: true },
+          'openai/gpt-4o': { supports_reasoning: false, supports_vision: true },
+        },
+      ),
+    )
+  })
+
+  it('treats reordered glob patterns as the same config', () => {
+    expect(
+      buildCacheKey('litellm', 'http://localhost:4000', { includeModels: ['prod/*', 'team/*'] }, {}),
+    ).toBe(
+      buildCacheKey('litellm', 'http://localhost:4000', { includeModels: ['team/*', 'prod/*'] }, {}),
+    )
   })
 })

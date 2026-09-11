@@ -304,6 +304,7 @@ Model classification (tool-call badge, attachments, reasoning, input modalities)
 - Overrides apply on top of whatever the proxy reports, with an explicit `false` winning — a flag the proxy never reported can be forced on just the same.
 - Keys are exact model ids as they appear in `/v1/models` (not globs).
 - Overridden flags flow into the picker exactly like natively reported ones, and the adjusted view is what gets persisted to the model cache.
+- Changing `modelCapabilities` (or `includeModels`/`excludeModels`) starts a fresh discovery on the next start — the cache is scoped by that config — so the picker reflects the new flags immediately.
 
 ## 🔧 How it works
 
