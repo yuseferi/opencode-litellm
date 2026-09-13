@@ -348,7 +348,7 @@ sequenceDiagram
 6. Discovered models are merged on top of any user-defined ones — never overwriting them — and persisted to the cache.
 7. On every `session.created` event the cache is revalidated in the background (throttled to once per 5 minutes); refreshed entries surface on the next OpenCode start. The whole cold path is capped by a 20 s timeout so a slow proxy never blocks boot.
 
-> **OpenCode Desktop:** Dynamic LiteLLM models currently appear in the CLI but may not appear in the Desktop model picker. This is caused by an OpenCode Desktop config-hook lifecycle issue: Desktop does not propagate plugin mutations to the provider state used by the picker. The plugin cannot safely work around this without persisting resolved configuration and credentials. Track [OpenCode issue #25630](https://github.com/anomalyco/opencode/issues/25630) and [pull request #38836](https://github.com/anomalyco/opencode/pull/38836) for the upstream fix.
+> **OpenCode Desktop:** Dynamic LiteLLM models currently appear in the CLI but may not appear in the Desktop model picker. This is an observed OpenCode Desktop config-hook limitation: plugin mutations are not reflected in the provider state used by the picker. The plugin cannot safely work around this without persisting resolved configuration and credentials. Track [issue #5](https://github.com/yuseferi/opencode-litellm/issues/5) for updates.
 
 ## 📋 Requirements
 
@@ -385,10 +385,10 @@ delete the cache directory (`~/.cache/opencode-litellm/`, or
 <details>
 <summary><b>Why do discovered models appear in the CLI but not OpenCode Desktop?</b></summary>
 
-OpenCode Desktop currently does not propagate mutations made by a plugin's
-`config` hook to the provider state used by its model picker. The plugin works
+OpenCode Desktop currently does not reflect mutations made by a plugin's
+`config` hook in the provider state used by its model picker. The plugin works
 as expected in the CLI, but there is no safe plugin-side workaround yet. This
-is being tracked upstream in [OpenCode issue #25630](https://github.com/anomalyco/opencode/issues/25630).
+is being tracked in [issue #5](https://github.com/yuseferi/opencode-litellm/issues/5).
 </details>
 
 <details>
