@@ -337,7 +337,7 @@ sequenceDiagram
         Plugin->>Cache: persist for next startup
     end
     Note over Plugin,Cache: on session.created, revalidate cache in<br/>the background (throttled to 5 min)
-    OC->>OC: render model picker with all discovered models
+    OC->>OC: render model picker with all discovered models (CLI)
 ```
 
 1. On OpenCode startup the `config` lifecycle hook fires.
@@ -347,6 +347,8 @@ sequenceDiagram
 5. **Cold path:** `/v1/models` and `/v1/model/info` are fetched in parallel. Models are enriched with info metadata (`mode`, token limits, capability flags, per-token pricing — `/v1/models` omits these for database-defined models) and converted into OpenCode model entries with formatted `name`, inferred `modalities`, and `cost` (USD/1M tokens, converted from LiteLLM's USD/token). Non-chat models (embedding / image / audio) are excluded from the picker.
 6. Discovered models are merged on top of any user-defined ones — never overwriting them — and persisted to the cache.
 7. On every `session.created` event the cache is revalidated in the background (throttled to once per 5 minutes); refreshed entries surface on the next OpenCode start. The whole cold path is capped by a 20 s timeout so a slow proxy never blocks boot.
+
+> **OpenCode Desktop:** Dynamic LiteLLM models currently appear in the CLI but may not appear in the Desktop model picker. This is caused by an OpenCode Desktop config-hook lifecycle issue: Desktop does not propagate plugin mutations to the provider state used by the picker. The plugin cannot safely work around this without persisting resolved configuration and credentials. Track [OpenCode issue #25630](https://github.com/anomalyco/opencode/issues/25630) and [pull request #38836](https://github.com/anomalyco/opencode/pull/38836) for the upstream fix.
 
 ## 📋 Requirements
 
@@ -378,6 +380,15 @@ updates the on-disk cache. The new model appears on your **next OpenCode
 start** — no OpenCode config change needed. To force an immediate refetch,
 delete the cache directory (`~/.cache/opencode-litellm/`, or
 `$XDG_CACHE_HOME/opencode-litellm/`).
+</details>
+
+<details>
+<summary><b>Why do discovered models appear in the CLI but not OpenCode Desktop?</b></summary>
+
+OpenCode Desktop currently does not propagate mutations made by a plugin's
+`config` hook to the provider state used by its model picker. The plugin works
+as expected in the CLI, but there is no safe plugin-side workaround yet. This
+is being tracked upstream in [OpenCode issue #25630](https://github.com/anomalyco/opencode/issues/25630).
 </details>
 
 <details>
