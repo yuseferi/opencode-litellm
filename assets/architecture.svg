@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-label="Architecture: OpenCode loads models via the opencode-litellm config hook, which discovers them from the LiteLLM proxy and caches them on disk">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-label="Architecture: OpenCode registers models through the opencode-litellm provider transform, which discovers them from the LiteLLM proxy, caches them, and reloads the provider registry when they change">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#101831"/>
@@ -22,7 +22,7 @@
     <rect x="470" y="64" width="260" height="118" rx="14" fill="#182449" stroke="#F8FAFC" stroke-width="2.5"/>
     <text x="600" y="112" text-anchor="middle" font-size="24" font-weight="700" fill="#FFFFFF">opencode-litellm</text>
     <text x="600" y="142" text-anchor="middle" font-size="15" fill="#9FB0D9">discover · merge · cache</text>
-    <text x="600" y="163" text-anchor="middle" font-size="13" fill="#66799F">config hook · SWR</text>
+    <text x="600" y="163" text-anchor="middle" font-size="13" fill="#66799F">provider transform · SWR</text>
 
     <!-- LiteLLM box -->
     <rect x="876" y="64" width="260" height="118" rx="14" fill="#0D2B36" stroke="#22D3EE" stroke-width="2"/>
@@ -32,7 +32,7 @@
 
     <!-- Top row arrows -->
     <line x1="324" y1="123" x2="462" y2="123" stroke="#5B6B85" stroke-width="2" marker-end="url(#arrow)"/>
-    <text x="397" y="112" text-anchor="middle" font-size="15" fill="#8CA0BE">config hook</text>
+    <text x="397" y="112" text-anchor="middle" font-size="15" fill="#8CA0BE">register + reload</text>
 
     <line x1="730" y1="123" x2="868" y2="123" stroke="#5B6B85" stroke-width="2" marker-end="url(#arrow)"/>
     <text x="803" y="112" text-anchor="middle" font-size="15" fill="#8CA0BE">discovery</text>
@@ -57,7 +57,7 @@
     <text x="968" y="362" text-anchor="middle" font-size="13.5" fill="#7C8AA5">OpenAI · Anthropic · Bedrock · Ollama · …</text>
 
     <!-- Footer -->
-    <text x="64" y="398" font-size="14" fill="#64748B">zero config · zero runtime deps · no restart loops</text>
+    <text x="64" y="398" font-size="14" fill="#64748B">OpenCode 1 + 2 · dynamic models · no restart loops</text>
     <text x="1136" y="398" text-anchor="end" font-size="13" fill="#475569">opencode-litellm</text>
   </g>
 </svg>

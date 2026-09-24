@@ -9,7 +9,12 @@
 
 ### Features
 
+* support the OpenCode 2 API with the OpenCode 1 server entrypoint
 * add `formatModelNames` option to keep raw model ids in the picker
+
+### Bug Fixes
+
+* register models without modality metadata as text-only to avoid image requests to text-only routes
 
 # [1.2.0](https://github.com/yuseferi/opencode-litellm/compare/v1.1.0...v1.2.0) (2026-09-13)
 

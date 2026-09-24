@@ -60,7 +60,9 @@ describe('model cache', () => {
   it('ignores cache files written by a different plugin version', () => {
     writeModelCache(KEY, { m: {} })
     rewriteCacheFile(KEY, (parsed) => {
-      parsed.version = 999
+      // v1 entries lack the explicit text-only modality metadata and must
+      // not make OpenCode fall back to image-capable defaults after upgrade.
+      parsed.version = 1
     })
     expect(readModelCache(KEY)).toBeNull()
     writeModelCache(KEY, { m: {} })

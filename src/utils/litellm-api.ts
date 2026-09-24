@@ -172,11 +172,13 @@ export async function discoverLiteLLMModelInfo(
 }
 
 /**
- * Try the most common ports a LiteLLM proxy is started on.
- * The default `litellm --port` is 4000, but 8000 is also widely used
- * and 8080 is a common reverse-proxy default.
+ * Use an explicit LITELLM_BASE_URL when set; otherwise try the most common
+ * ports. The default `litellm --port` is 4000, with 8000 and 8080 also common.
  */
 export async function autoDetectLiteLLM(apiKey?: string, customHeaders?: Record<string, string>): Promise<string | null> {
+  const configuredBaseURL = process.env.LITELLM_BASE_URL?.trim()
+  if (configuredBaseURL) return normalizeBaseURL(configuredBaseURL)
+
   const commonPorts = [4000, 8000, 8080]
   for (const port of commonPorts) {
     const baseURL = `http://localhost:${port}`

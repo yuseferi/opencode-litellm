@@ -20,6 +20,28 @@ describe('toConfigModel naming (formatModelNames)', () => {
     )
   })
 
+  it('preserves an explicit false tool-calling capability', () => {
+    expect(
+      toConfigModel(chat, undefined, true)?.tool_call,
+    ).toBeUndefined()
+    expect(
+      toConfigModel(model('text-only', { supports_function_calling: false }))?.tool_call,
+    ).toBe(false)
+  })
+
+  it('preserves an explicit no-vision modality override', () => {
+    expect(
+      toConfigModel(model('text-only', { supports_vision: false }))?.modalities,
+    ).toEqual({ input: ['text'], output: ['text'] })
+  })
+
+  it('defaults to text-only when capability metadata is absent', () => {
+    expect(toConfigModel(model('text-only'))?.modalities).toEqual({
+      input: ['text'],
+      output: ['text'],
+    })
+  })
+
   it('leaves provider prefixes and version suffixes intact when raw', () => {
     const versioned = model('claude-opus-4-5@20251101')
     expect(toConfigModel(versioned, undefined, false)?.name).toBe(

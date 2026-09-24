@@ -40,7 +40,8 @@
     "provenance": true
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.14.0"
+    "@opencode-ai/plugin": "^1.14.0",
+    "@opencode/plugin": "^2.0.14"
   },
   "devDependencies": {
     "@semantic-release/changelog": "^7.0.0",

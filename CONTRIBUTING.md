@@ -5,7 +5,7 @@ Thanks for your interest! This project is small, scoped, and aims to stay that w
 ## Project philosophy
 
 - **Tiny surface area.** The plugin does one thing: discover LiteLLM models and feed them to OpenCode. Features that drift from that focus belong in a sibling plugin, not in this one.
-- **Zero runtime deps** beyond `@opencode-ai/plugin`. Adding a dependency requires a strong justification.
+- **Small runtime surface.** The package supports both `@opencode-ai/plugin` (V1) and `@opencode/plugin` (V2). Adding other runtime dependencies requires a strong justification.
 - **Strict TypeScript.** No `any` in public APIs. Internal `any` is acceptable only when the OpenCode `config` type is genuinely opaque to us.
 - **Non-blocking by default.** Anything that talks to the network must be wrapped in a timeout and must never throw out of the plugin lifecycle.
 
@@ -29,11 +29,11 @@ npm link
 
 # In your OpenCode workspace
 npm link opencode-plugin-litellm
-# add it to opencode.json plugins, then:
+# add it to opencode.json's `plugins` list, then:
 opencode
 ```
 
-Plugin logs are prefixed with `[opencode-litellm]` — find them under `~/.local/share/opencode/log/`.
+Plugin logs are prefixed with `[opencode-litellm]`. V1 logs appear under `~/.local/share/opencode/log/`; V2 logs use the plugin host's console logging.
 
 ## Pull request checklist
 

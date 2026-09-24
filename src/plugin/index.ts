@@ -28,17 +28,30 @@ const CHAT_PROVIDER_ID = 'litellm'
 // Covers the 3 s health check plus the parallel models/model-info fetch
 // phase, with headroom. Scales with LITELLM_REQUEST_TIMEOUT_MS so slow
 // proxies aren't cut off by the overall cap either (issue #20).
-const DISCOVERY_TIMEOUT_MS = Math.max(20000, getRequestTimeoutMs() + 5000)
+export const DISCOVERY_TIMEOUT_MS = Math.max(20000, getRequestTimeoutMs() + 5000)
 // Don't revalidate a baseURL's cache more often than this, so a burst
 // of `session.created` events can't generate repeated discovery traffic.
 const REFRESH_MIN_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 
 type LogLevel = 'info' | 'warn' | 'error' | 'debug'
 
-let logClient: PluginInput['client'] | null = null
+type LogDetails = {
+  service: string
+  level: LogLevel
+  message: string
+}
+
+let logWriter: ((details: LogDetails) => void) | null = null
 
 function initLogging(client: PluginInput['client']): void {
-  logClient = client
+  logWriter = (details) => {
+    void client.app.log({ body: details }).catch(() => {})
+  }
+}
+
+/** OpenCode 2 does not expose a server log method through its plugin context. */
+export function initV2Logging(): void {
+  logWriter = null
 }
 
 /**
@@ -48,10 +61,8 @@ function initLogging(client: PluginInput['client']): void {
  * (issue #15); client.app.log lands in OpenCode's log files instead.
  */
 function log(level: LogLevel, message: string): void {
-  if (logClient) {
-    void logClient.app
-      .log({ body: { service: 'opencode-litellm', level, message } })
-      .catch(() => {})
+  if (logWriter) {
+    logWriter({ service: 'opencode-litellm', level, message })
     return
   }
   // No client wired up (unit tests, unusual embedders) — fall back to
@@ -94,7 +105,7 @@ const refreshInFlight = new Set<string>()
  * wins. Clears the timer either way so a resolved discovery can't keep
  * a short-lived process alive waiting on a pending `setTimeout`.
  */
-function withTimeout<T>(
+export function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
 ): Promise<T | null> {
@@ -109,7 +120,7 @@ function withTimeout<T>(
  * Helper to determine if a provider ID or its configured options indicate
  * compatibility with LiteLLM.
  */
-function isLiteLLMProvider(
+export function isLiteLLMProvider(
   providerId: string,
   options: Record<string, unknown>,
 ): boolean {
@@ -125,7 +136,7 @@ function isLiteLLMProvider(
 /**
  * Read `customHeaders` from a provider options block.
  */
-function readCustomHeaders(
+export function readCustomHeaders(
   options: Record<string, unknown>,
 ): Record<string, string> | undefined {
   const raw = options.customHeaders
@@ -145,7 +156,7 @@ function readCustomHeaders(
  * several OpenCode providers). Non-string entries are dropped; an empty
  * result means "don't filter".
  */
-function readModelFilters(options: Record<string, unknown>): ModelFilters {
+export function readModelFilters(options: Record<string, unknown>): ModelFilters {
   const readPatterns = (raw: unknown): string[] | undefined => {
     if (!Array.isArray(raw)) return undefined
     const out = raw.filter((v): v is string => typeof v === 'string')
@@ -157,7 +168,7 @@ function readModelFilters(options: Record<string, unknown>): ModelFilters {
   }
 }
 
-function readFormatModelNames(options: Record<string, unknown>): boolean {
+export function readFormatModelNames(options: Record<string, unknown>): boolean {
   return options.formatModelNames !== false
 }
 
@@ -237,8 +248,8 @@ export function toConfigModel(
       output: model.max_output_tokens ?? 0,
     }
   }
-  if (model.supports_function_calling) {
-    entry.tool_call = true
+  if (model.supports_function_calling != null) {
+    entry.tool_call = model.supports_function_calling
   }
   if (model.supports_reasoning) {
     entry.reasoning = true
@@ -267,9 +278,13 @@ export function toConfigModel(
   if (model.supports_vision) input.push('image')
   if (model.supports_pdf_input) input.push('pdf')
   if (model.supports_audio_input) input.push('audio')
-  if (input.length > 1) {
-    entry.modalities = { input, output: ['text'] }
-  }
+  // LiteLLM often omits capability flags for database-defined models.
+  // Do not omit `modalities` in that case: OpenCode's fallback for an
+  // unknown custom model includes image input, which makes text-only
+  // llama.cpp routes receive image parts and fail with "image input is
+  // not supported". Text-only is the safe default until a proxy reports
+  // a positive capability.
+  entry.modalities = { input, output: ['text'] }
   entry.variants = info?.supports_reasoning_efforts?.length
     ? Object.fromEntries(
         info.supports_reasoning_efforts.map((effort) => [
@@ -295,7 +310,7 @@ export function toConfigModel(
  * Returns `null` when the proxy is unreachable/unauthorized or exposes
  * no models, so callers can distinguish "no data" from "empty result".
  */
-async function discoverModels(
+export async function discoverModels(
   baseURL: string,
   apiKey: string | undefined,
   customHeaders: Record<string, string> | undefined,
