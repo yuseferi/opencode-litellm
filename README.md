@@ -6,7 +6,7 @@
 
 # opencode-litellm
 
-**[OpenCode CLI + Desktop](https://opencode.ai) + [LiteLLM](https://github.com/BerriAI/litellm) provider with zero configuration.**
+**[OpenCode V1 CLI + V2 Desktop](https://opencode.ai) + [LiteLLM](https://github.com/BerriAI/litellm) provider with zero configuration.**
 
 [![Works with OpenCode](https://img.shields.io/badge/works%20with-OpenCode-7C5CFF?style=flat-square)](https://opencode.ai)
 [![OpenCode V1 + V2](https://img.shields.io/badge/OpenCode%20V1%20%2B%20V2-supported-16A34A?style=flat-square)](https://opencode.ai)
