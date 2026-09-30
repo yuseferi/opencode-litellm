@@ -21,6 +21,12 @@
 
 ## [Unreleased]
 
+### Bug Fixes
+
+* restore baseline reasoning-effort variants from sparse LiteLLM metadata (including GPT-6 Astra), respect explicit effort lists and disabled levels
+* avoid inferring reasoning-effort variants from negative-only flags or unsupported request parameters
+* constrain inferred GPT-5 Pro effort variants to provider-supported levels, including aliased and dated deployments
+
 ### Features
 
 * support the OpenCode 2 API with the OpenCode 1 server entrypoint

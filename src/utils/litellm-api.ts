@@ -1,5 +1,6 @@
 import type { LiteLLMModel, LiteLLMModelInfo, LiteLLMModelInfoResponse, LiteLLMModelsResponse } from '../types'
 import { CAPABILITY_FLAGS } from './model-capabilities'
+import { resolveReasoningEfforts } from './reasoning-efforts'
 
 export const DEFAULT_LITELLM_URL = 'http://localhost:4000'
 const MODELS_ENDPOINT = '/v1/models'
@@ -136,23 +137,7 @@ export async function discoverLiteLLMModelInfo(
       }
     }
 
-    // Add supports reasoning efforts if present in litellm_params
-    const reasoningEffortPattern = /^supports_([a-z]+)_reasoning_effort$/
-    const efforts = new Set<string>()
-    for (const source of [info, entry.litellm_params]) {
-      if (!source || typeof source !== 'object') continue
-      for (const [key, value] of Object.entries(source)) {
-        const match = key.match(reasoningEffortPattern)
-        if (match && value === true) {
-          efforts.add(match[1])
-        }
-      }
-    }
-    if (efforts.size > 0) {
-      info.supports_reasoning_efforts = [
-        ...new Set([...(info.supports_reasoning_efforts ?? []), ...efforts]),
-      ]
-    }
+    info.supports_reasoning_efforts = resolveReasoningEfforts(info, entry.litellm_params)
 
     // Index under every alias LiteLLM may use for this model — the
     // `/v1/models` id can match any of them depending on how the

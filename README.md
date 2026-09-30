@@ -211,12 +211,28 @@ Here, `openai/gpt-4o` keeps your custom name; every other model from the proxy i
 All discovered models — reasoning-tier included — register under your single
 LiteLLM provider and are invoked through `/v1/chat/completions`.
 
-If LiteLLM reports per-model reasoning-effort support (e.g.
-`supports_low_reasoning_effort`, `supports_medium_reasoning_effort`,
-`supports_high_reasoning_effort` in `model_info`), the plugin automatically
-surfaces those as OpenCode variants under the discovered model. Each variant
-sets `reasoningEffort` to the reported level, so you can switch between
-effort levels from the model picker without hand-curating every entry.
+If LiteLLM reports per-model reasoning-effort support, the plugin automatically
+surfaces it as OpenCode variants. Explicit `reasoning_effort_levels` (or
+`supports_reasoning_efforts`) lists take precedence, including empty lists.
+Otherwise, per-level `supports_*_reasoning_effort` flags enable discovery:
+`low`, `medium`, and `high` are included unless explicitly disabled, while
+optional levels such as `none`, `minimal`, `xhigh`, and `max` require an explicit
+`true`. This handles sparse metadata such as GPT-6 Astra's `xhigh`/`max` flags
+without losing its baseline levels. No levels are inferred from
+`supports_reasoning: true` alone, or from negative-only effort flags when
+reasoning support is unknown. Inferred variants are also suppressed when
+`supported_openai_params` lists neither `reasoning_effort` nor `reasoning`.
+Metadata is read from `model_info`, falling back to `litellm_params` for
+missing/null values.
+
+When explicit effort lists are absent, known GPT-5 Pro restrictions also apply:
+GPT-5 Pro is limited to `high`, and GPT-5.2 Pro / GPT-5.4 Pro to `medium`, `high`,
+and explicitly supported `xhigh`. These restrictions use the upstream model key
+or `litellm_params.model`, including provider prefixes and dated snapshots, so
+deployment aliases work too. An explicit effort list can override this fallback.
+
+Each variant sets `reasoningEffort` to the reported level, so you can switch
+between effort levels from the model picker without hand-curating every entry.
 
 > **Note**: OpenAI's reasoning-tier models (gpt-5, o1, o3, o4) reject
 > requests that combine `reasoning_effort` with function tools on

@@ -67,6 +67,8 @@ export interface LiteLLMModelInfo {
   supports_vision?: boolean
   supports_reasoning?: boolean
   supports_reasoning_efforts?: string[]
+  reasoning_effort_levels?: string[] | null
+  supported_openai_params?: string[] | null
   supports_pdf_input?: boolean
   supports_audio_input?: boolean
   input_cost_per_token?: number
