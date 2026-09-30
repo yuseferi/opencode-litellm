@@ -176,7 +176,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-env-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory
     process.env.LITELLM_BASE_URL = 'https://llm.example.com/v1'
-    process.env.LITELLM_API_KEY = 'test-env-key'
+    process.env.LITELLM_API_KEY = 'example-litellm-key'
     delete process.env.LITELLM_MASTER_KEY
 
     const requestURLs: string[] = []
@@ -235,14 +235,14 @@ describe('OpenCode 2 plugin entrypoint', () => {
     expect(registered[0].info).toMatchObject({ id: 'litellm' })
     expect(registered[0].info.settings).toMatchObject({
       baseURL: 'https://llm.example.com/v1',
-      apiKey: 'test-env-key',
+      apiKey: 'example-litellm-key',
     })
     expect(registered[0].models.map((model) => model.id)).toContain('model-from-env')
     expect(registered[0].models[0]).toMatchObject({
       capabilities: { input: ['text'], output: ['text'] },
     })
     expect(requestURLs).toContain('https://llm.example.com/v1/models')
-    expect(authorizationHeaders).toContain('Bearer test-env-key')
+    expect(authorizationHeaders).toContain('Bearer example-litellm-key')
 
     await cleanup?.()
   })
@@ -267,7 +267,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
       name: 'Configured LiteLLM',
       activation: 'enabled',
       package: '@opencode/ai/providers/openai-compatible',
-      settings: { baseURL: `${baseURL}/v1`, apiKey: 'test-key' },
+      settings: { baseURL: `${baseURL}/v1`, apiKey: 'example-api-key' },
       headers: { 'X-Gateway': 'test' },
     }
     const curatedModel = { id: 'curated-model', name: 'Curated model' }
@@ -899,7 +899,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
       name: 'Configured LiteLLM',
       activation: 'enabled',
       package: '@opencode/ai/providers/openai-compatible',
-      settings: { baseURL: `${baseURL}/v1`, apiKey: 'test-key' },
+      settings: { baseURL: `${baseURL}/v1`, apiKey: 'example-api-key' },
       headers: {},
     }
     let currentModels = new Map<string, Record<string, unknown>>([
