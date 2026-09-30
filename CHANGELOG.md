@@ -1,3 +1,10 @@
+## [1.4.2](https://github.com/yuseferi/opencode-litellm/compare/v1.4.1...v1.4.2) (2026-09-30)
+
+
+### Bug Fixes
+
+* restore baseline reasoning-effort variants ([#38](https://github.com/yuseferi/opencode-litellm/issues/38)) ([1d8706e](https://github.com/yuseferi/opencode-litellm/commit/1d8706e377739f1ec1798307e488f0ca7d2f89b3))
+
 ## [1.4.1](https://github.com/yuseferi/opencode-litellm/compare/v1.4.0...v1.4.1) (2026-09-29)
 
 
