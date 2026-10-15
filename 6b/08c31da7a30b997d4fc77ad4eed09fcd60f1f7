@@ -1,0 +1,23 @@
+CHANGELOG.md
+  s_582409d230a625::t_a002165043c551 31-34
+README.md
+  s_582409d230a625::t_8582053bf06f2f 280-286
+  s_582409d230a625::t_e0083518994154 574,576
+  s_582409d230a625::t_3a9a980bd949de 243-245,250-259
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "6b08c31da7a30b997d4fc77ad4eed09fcd60f1f7",
+  "prompts": {},
+  "sessions": {
+    "s_582409d230a625": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_ec10c9601ffeiFjL42YIklryIU",
+        "model": "unknown"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
