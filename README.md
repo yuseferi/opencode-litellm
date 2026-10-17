@@ -78,7 +78,7 @@ also shows how to configure a provider directly in `opencode.json`.
 | 💵 **Real pricing** | Maps `input_cost_per_token` / `output_cost_per_token` (and cache read/write costs) from `/v1/model/info` into OpenCode's `cost` field, so the picker and `/cost` show what the proxy actually bills instead of `$0.00`. Models LiteLLM has no price for are left unpriced, not falsely marked free. |
 | 🧩 **Reasoning-effort variants** | When LiteLLM reports per-model effort support (`supports_low_reasoning_effort`, …), the plugin surfaces each level as a picker variant automatically. |
 | 🧭 **Responses-API routing** | Models LiteLLM reports with `mode: "responses"` are invoked through `/v1/responses` instead of `/v1/chat/completions`, with no extra configuration. OpenCode 2 overrides the runtime package per model; OpenCode 1 gets a `<provider>-responses` sibling. |
-| 🔐 **Auth-aware** | Honours `LITELLM_API_KEY` / `LITELLM_MASTER_KEY`, `providers.litellm.settings.apiKey`, and OpenCode `/connect` credentials on the V1 server path. |
+| 🔐 **Auth-aware** | Honours `LITELLM_API_KEY` / `LITELLM_MASTER_KEY`, `providers.litellm.settings.apiKey`, OpenCode `/connect` credentials, and (OpenCode 2) a **LiteLLM** entry in the connect-provider dialog — key plus optional base URL, entered entirely from the web UI. |
 | 🌐 **Gateway-friendly** | Supports provider `headers` (and the legacy `customHeaders` option) for proxies behind Cloudflare Access or other API gateways. |
 | 🧩 **Splittable catalog** | `includeModels` / `excludeModels` (glob patterns) let one LiteLLM proxy be divided into several OpenCode providers — e.g. by naming prefix — without hand-maintaining a model list. |
 | 🎚️ **Capability overrides** | `modelCapabilities` forces or retracts per-model capability flags (`supports_vision`, `supports_function_calling`, …) when `/v1/model/info` is unavailable or disagrees with your deployment. |
@@ -296,17 +296,27 @@ Selecting a Responses model on OpenCode 1 therefore means picking
 
 ### Authentication
 
-If your LiteLLM proxy requires a master key, expose it via either approach:
+If your LiteLLM proxy requires a master key, expose it via any of these approaches:
 
 | Method | Example |
 |---|---|
+| Web UI / `/connect` | Run `/connect` (or use the Desktop providers view), pick **LiteLLM**, paste the key, and optionally fill in the base URL and provider id |
 | Env var (base URL) | `LITELLM_BASE_URL=https://litellm.internal.example.com/v1` |
 | Env var | `export LITELLM_API_KEY=sk-...` |
 | Env var (alias) | `export LITELLM_MASTER_KEY=sk-...` |
 | Config | `"settings": { "apiKey": "{env:LITELLM_API_KEY}" }` |
-| OpenCode `/connect` | Run `/connect`, search for your `litellm` provider entry, and paste the key |
 
-The env var path lets you commit `opencode.json` without leaking secrets. On OpenCode 1, `/connect` credentials are read from OpenCode's auth store (`~/.local/share/opencode/auth.json`) and applied to health checks, model discovery, and completion-time requests. OpenCode 2 users can use `settings.apiKey` with an environment substitution or set `LITELLM_API_KEY` on the background service as shown in the Quickstart.
+The env var path lets you commit `opencode.json` without leaking secrets. On OpenCode 1, `/connect` credentials are read from OpenCode's auth store (`~/.local/share/opencode/auth.json`) and applied to health checks, model discovery, and completion-time requests. On OpenCode 2, a credential saved through `/connect` is a first-class integration connection: the plugin registers the **LiteLLM** integration with an API-key form, uses the stored key for discovery, and lets OpenCode inject it into completion requests — the key never appears in `opencode.json` or provider settings. OpenCode 2 users can still use `settings.apiKey` with an environment substitution or set `LITELLM_API_KEY` on the background service as shown in the Quickstart.
+
+#### Web UI connect (OpenCode 2)
+
+With no configuration at all, `/connect` → **LiteLLM** is enough:
+
+1. Enter the API key when prompted.
+2. Optionally fill the form: **Base URL** (e.g. `https://llm.example.com/v1`) and **Provider ID** (defaults to `litellm`; pick a different id when your config already defines a `litellm` provider, so the connected gateway gets its own entry). Reconnecting with a different id moves the gateway to that provider.
+3. Models appear in the picker without editing `opencode.json` or restarting.
+
+Precedence when several sources are configured: explicit provider/plugin settings always win. For the key, the environment (`LITELLM_API_KEY`/`LITELLM_MASTER_KEY`) is consulted before the dialog credential; for the base URL, the dialog answer beats `LITELLM_BASE_URL` and local port auto-detection. A provider defined in `opencode.json` (without its own key) picks the saved credential up on the next start, while providers created from the dialog update immediately — reconnecting re-points them in place, including a changed base URL or provider id.
 
 ### Slow proxies (`LITELLM_REQUEST_TIMEOUT_MS`)
 

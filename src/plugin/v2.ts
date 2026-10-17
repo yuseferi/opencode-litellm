@@ -1,4 +1,4 @@
-import { Model, Plugin, Provider } from '@opencode/plugin'
+import { Integration, Model, Plugin, Provider } from '@opencode/plugin'
 import type { Context } from '@opencode/plugin/promise/plugin'
 import type { PluginInput } from '@opencode-ai/plugin'
 import {
@@ -12,6 +12,12 @@ import {
   withTimeout,
   LiteLLMPlugin,
 } from './index'
+import {
+  LITELLM_INTEGRATION_ID,
+  readConnectedConfig,
+  registerLiteLLMIntegration,
+  type ConnectedLiteLLM,
+} from './integration'
 import {
   buildCacheKey,
   readModelCacheEntry,
@@ -247,40 +253,52 @@ async function makeProviderSource(
   provider: ProviderInfo | undefined,
   pluginOptions: Record<string, unknown>,
 ): Promise<ProviderSource | null> {
-  const id = provider?.id ?? readString(pluginOptions.providerID) ?? CHAT_PROVIDER_ID
   const providerSettings = asRecord(provider?.settings)
   const settings = { ...pluginOptions, ...providerSettings }
-  const configuredBaseURL = readString(settings.baseURL)
   const customHeaders = {
     ...readHeaders(pluginOptions.customHeaders),
     ...readCustomHeaders(settings),
     ...readHeaders(provider?.headers),
   }
-  let connectedApiKey: string | undefined
-  if (provider?.integrationID) {
-    try {
-      const connection = await context.integration.connection.active(provider.integrationID)
-      const credential = connection
-        ? await context.integration.connection.resolve(connection)
-        : undefined
-      if (credential?.type === 'key') connectedApiKey = credential.key
-    } catch {
-      // A missing or unrelated integration does not prevent other auth sources.
-    }
-  }
+  // Credential plus dialog form answers. A provider wired to its own
+  // integration keeps using exactly that one; otherwise the plugin's
+  // registered integration is consulted, so a gateway can be connected
+  // entirely from the web UI with no hand-written config.
+  const connected: ConnectedLiteLLM | undefined = await readConnectedConfig(
+    context,
+    provider?.integrationID ?? LITELLM_INTEGRATION_ID,
+  )
+  const id =
+    provider?.id ??
+    readString(pluginOptions.providerID) ??
+    connected?.providerID ??
+    CHAT_PROVIDER_ID
+  const configuredBaseURL = readString(settings.baseURL)
+  const connectedApiKey = connected?.apiKey
   const configuredApiKey =
     readString(providerSettings.apiKey) ??
     readString(pluginOptions.apiKey) ??
     process.env.LITELLM_API_KEY ??
     process.env.LITELLM_MASTER_KEY
-  const usesConnectionCredential = !configuredApiKey && Boolean(provider?.integrationID)
+  // A provider bound to an integration relies on OpenCode for its credential
+  // even before one is connected. The plugin's own integration only counts
+  // once it actually resolved a key, so env/config setups are unaffected.
+  const usesConnectionCredential =
+    !configuredApiKey && Boolean(provider?.integrationID ?? connectedApiKey)
+  const integrationID =
+    provider?.integrationID ??
+    (usesConnectionCredential && connectedApiKey ? LITELLM_INTEGRATION_ID : undefined)
   const apiKey = configuredApiKey ?? connectedApiKey
   const filters = readModelFilters(settings)
   const capabilities = parseModelCapabilities(settings.modelCapabilities)
   const formatModelNames = readFormatModelNames(settings)
+  // Explicit config beats the URL typed into the dialog, which beats the
+  // environment and local port probing.
   const detectedBaseURL = configuredBaseURL
     ? normalizeBaseURL(configuredBaseURL)
-    : await autoDetectLiteLLM(apiKey, customHeaders)
+    : connected?.baseURL
+      ? normalizeBaseURL(connected.baseURL)
+      : await autoDetectLiteLLM(apiKey, customHeaders)
 
   if (!detectedBaseURL) {
     return null
@@ -328,7 +346,7 @@ async function makeProviderSource(
     package: provider?.package || OPENAI_COMPATIBLE_PACKAGE,
     settings,
     headers: customHeaders,
-    integrationID: provider?.integrationID,
+    integrationID,
     usesConnectionCredential,
     credentialReloadRequired: false,
     refreshRequired: false,
@@ -524,6 +542,62 @@ async function reconcileProviderSources(
   return changed
 }
 
+/**
+ * Build and publish a source from the dialog's active credential.
+ *
+ * Called for the first connect with nothing bound yet, and to rebuild
+ * dialog-built sources after a credential switch — a reconnect may move the
+ * gateway to a new base URL or provider id, so those sources are re-derived
+ * wholesale instead of key-refreshed.
+ *
+ * An existing source for the same id is left untouched unless it is a pure
+ * auto-detection/dialog-built fallback (no explicit baseURL in
+ * options/config): a fallback only stands in until a real endpoint is
+ * known, so the dialog's answers take over from it. Explicit option/env
+ * baseURLs — and host-registered providers — keep winning and are never
+ * replaced. Replaced sources' owned model ids carry over so models the
+ * gateway no longer serves are dropped on the next merge, and sources
+ * replaced under a different id are dropped from `sources` and marked in
+ * `staleProviderIds` for removal from the provider registry.
+ */
+async function publishConnectedSource(
+  context: Context,
+  pluginOptions: Record<string, unknown>,
+  sources: Map<string, ProviderSource>,
+  staleProviderIds: Set<string>,
+  replacing: ProviderSource[] = [],
+): Promise<void> {
+  try {
+    const source = await makeProviderSource(context, undefined, pluginOptions)
+    if (!source) return
+    const existing = sources.get(source.id)
+    if (existing && !(existing.fromFallback && !readString(existing.settings.baseURL))) return
+    const previous = existing ?? replacing.find((candidate) => candidate.id === source.id)
+    if (previous) source.ownedModelIds = new Set(previous.ownedModelIds)
+    for (const previousSource of replacing) {
+      if (previousSource.id === source.id) continue
+      const mapped = sources.get(previousSource.id)
+      if (mapped === previousSource) sources.delete(previousSource.id)
+      // Absent from the map means an earlier attempt already removed it but
+      // failed before reloading — still owed a registry removal. A different
+      // live source under the id (e.g. a host-registered provider took over)
+      // is left entirely alone.
+      if (mapped === previousSource || mapped === undefined) {
+        staleProviderIds.add(previousSource.id)
+      }
+    }
+    sources.set(source.id, source)
+    await context.provider.reload()
+    source.pendingPublication = false
+    logInfo(
+      `[opencode-litellm] Registered provider "${source.id}" from the connected LiteLLM credential.`,
+    )
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    logInfo(`[opencode-litellm] Could not register the connected provider: ${message}`)
+  }
+}
+
 const definition = Plugin.define({
   id: 'opencode-litellm',
   async setup(context) {
@@ -537,6 +611,14 @@ const definition = Plugin.define({
 
     const pluginOptions = asRecord(context.options)
     const sources = new Map<string, ProviderSource>()
+    // Providers the dialog replaced under a new id; the transform below
+    // removes them from the registry on the next reload.
+    const staleProviderIds = new Set<string>()
+
+    // Surface LiteLLM in the connect-provider dialog so gateways can be
+    // connected from the web UI. Purely additive: a host without the
+    // integration API, or a failed registration, keeps every other auth path.
+    const integrationRegistration = await registerLiteLLMIntegration(context)
 
     // First pass. On OpenCode 2 the host has not registered user-configured
     // providers yet, so this typically finds only built-ins; the event loop
@@ -555,12 +637,21 @@ const definition = Plugin.define({
     }
 
     const providerRegistration = await context.provider.transform((editor) => {
+      // Sources replaced under a different id leave their registry entries
+      // behind; drop them before publishing the current sources.
+      for (const id of staleProviderIds) editor.remove(id)
+      staleProviderIds.clear()
       for (const source of sources.values()) {
         const current = editor.get(source.id)
         if (current) {
           editor.update(source.id, (provider) => {
             provider.package = source.package
             provider.name = source.name
+            // Bind the provider to the integration its credential comes from,
+            // so OpenCode keeps injecting the key after a credential switch.
+            if (source.usesConnectionCredential && source.integrationID) {
+              provider.integrationID = Integration.ID.make(source.integrationID)
+            }
             const settings = {
               ...(provider.settings ?? {}),
               ...runtimeSettings(source),
@@ -590,6 +681,12 @@ const definition = Plugin.define({
               package: source.package,
               settings: runtimeSettings(source),
               headers: source.headers,
+              // With `integrationID` set, OpenCode resolves the API key from
+              // the connected credential at request time — the key itself
+              // never enters provider settings.
+              ...(source.usesConnectionCredential && source.integrationID
+                ? { integrationID: Integration.ID.make(source.integrationID) }
+                : {}),
             },
             models: source.models,
           })
@@ -666,6 +763,18 @@ const definition = Plugin.define({
             continue
           }
           if (event.type === 'credential.switched') {
+            // Sources the plugin built from the dialog re-derive everything
+            // (key, baseURL, provider id) from the active connection, so a
+            // reconnect can legitimately move them to a different gateway.
+            // Configured sources only refresh their key: config outranks the
+            // dialog for everything but the key.
+            const dialogBuilt = [...sources.values()].filter(
+              (source) =>
+                source.integrationID === event.data.integrationID &&
+                source.fromFallback &&
+                source.usesConnectionCredential &&
+                !readString(source.settings.baseURL),
+            )
             const changedSources = (await Promise.all(
               [...sources.values()]
                 .filter((source) => source.integrationID === event.data.integrationID)
@@ -677,8 +786,24 @@ const definition = Plugin.define({
               source.credentialReloadRequired = true
               source.refreshRequired = true
             }
-            if (changedSources.length > 0) {
-              await refreshProviderSources(context, changedSources, inFlight)
+            const keyOnlySources = changedSources.filter((source) => !dialogBuilt.includes(source))
+            if (keyOnlySources.length > 0) {
+              await refreshProviderSources(context, keyOnlySources, inFlight)
+            }
+            if (
+              event.data.integrationID === LITELLM_INTEGRATION_ID &&
+              (dialogBuilt.length > 0 || changedSources.length === 0)
+            ) {
+              // Rebuild dialog-built sources from the fresh credential — or,
+              // when no source is bound yet, publish the first one, taking
+              // over from a keyless auto-detection fallback if one exists.
+              await publishConnectedSource(
+                context,
+                pluginOptions,
+                sources,
+                staleProviderIds,
+                dialogBuilt,
+              )
             }
             continue
           }
@@ -704,6 +829,7 @@ const definition = Plugin.define({
     return async () => {
       controller.abort()
       await providerRegistration.dispose()
+      await integrationRegistration?.dispose()
     }
   },
 })
