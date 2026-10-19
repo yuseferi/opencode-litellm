@@ -43,6 +43,10 @@ describe('OpenCode 1 config hook', () => {
     originalLiteLLMMasterKey = process.env.LITELLM_MASTER_KEY
     delete process.env.LITELLM_API_KEY
     delete process.env.LITELLM_MASTER_KEY
+    // Isolate the box auth store: tests must never read the developer's real
+    // credentials, and stored-key fingerprints must be deterministic.
+    homeDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-home-'))
+    process.env.HOME = homeDirectory
     __resetOpenCodeAuthCacheForTests()
   })
 
@@ -337,7 +341,7 @@ describe('OpenCode 1 config hook', () => {
     })
     const cacheKey = buildCacheKey('litellm', 'http://127.0.0.1:45556', {}, {}, {
       formatModelNames: true,
-    })
+    }, 'example-key')
     writeModelCache(
       cacheKey,
       { 'chat-model': { name: 'Chat' }, 'responses-model': { name: 'Resp' } },

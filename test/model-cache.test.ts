@@ -144,6 +144,21 @@ describe('buildCacheKey', () => {
     ).toBe(KEY)
   })
 
+  it('isolates the key by credential fingerprint', () => {
+    // Regression for the CodeRabbit review finding: a model list cached with
+    // one credential must never be served to another — keys expose different
+    // model sets, so a credential change starts a fresh discovery.
+    const without = buildCacheKey('litellm', 'http://localhost:4000', {}, {})
+    const keyA = buildCacheKey('litellm', 'http://localhost:4000', {}, {}, {}, 'sk-key-a')
+    const keyA2 = buildCacheKey('litellm', 'http://localhost:4000', {}, {}, {}, 'sk-key-a')
+    const keyB = buildCacheKey('litellm', 'http://localhost:4000', {}, {}, {}, 'sk-key-b')
+    expect(keyA).toBe(keyA2)
+    expect(keyA).not.toBe(keyB)
+    expect(keyA).not.toBe(without)
+    // The fingerprint never carries the raw key.
+    expect(keyA).not.toContain('sk-key-a')
+  })
+
   it('changes the key when capability overrides are added or changed', () => {
     // Regression for the CodeRabbit review finding: a model previously
     // cached with `supports_vision: false` must not be served again

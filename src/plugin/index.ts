@@ -834,9 +834,12 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         // Identity includes the filter/capability/naming config: those
         // are baked into cached entries, so changing them must start a
         // fresh discovery instead of serving the old adjusted view.
+        // The cache key is isolated by the effective credential (a fingerprint,
+        // never the raw key): a credential change starts a fresh discovery
+        // instead of serving another credential's cached model list.
         const cacheKey = buildCacheKey(providerId, baseURL, filters, capabilities, {
           formatModelNames,
-        })
+        }, apiKey)
 
         // Remember how to reach this proxy so the `event` hook can
         // revalidate its cache in the background on new sessions.

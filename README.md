@@ -344,6 +344,8 @@ With no configuration at all, `/connect` → **LiteLLM** is enough:
 
 Precedence when several sources are configured: explicit provider/plugin settings always win. For the key, a credential saved in the box (the active connection or the `/connect` entry) beats the environment (`LITELLM_API_KEY`/`LITELLM_MASTER_KEY`), which is only a fallback; for the base URL, the dialog answer beats `LITELLM_BASE_URL` and local port auto-detection. A provider defined in `opencode.json` (without its own key) picks the saved credential up on the next start, while providers created from the dialog update immediately — reconnecting re-points them in place, including a changed base URL or provider id.
 
+The discovered model list is cached per credential: a short hash of the effective key (never the raw key) is part of every cache entry's key, so when the selected credential changes the next discovery starts fresh instead of serving another credential's model list. A `credential.switched` event also recomputes the effective key and reloads the provider registry when it changed — including the first credential saved after setup.
+
 ### Slow proxies (`LITELLM_REQUEST_TIMEOUT_MS`)
 
 Each discovery request (`/v1/models`, `/v1/model/info`) is capped at 15 s by default. Proxies with many database-defined models — or a gateway in front of LiteLLM — can legitimately take longer. Raise the budget with:

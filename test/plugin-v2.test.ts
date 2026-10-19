@@ -25,6 +25,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
   let originalLiteLLMApiKey: string | undefined
   let originalLiteLLMMasterKey: string | undefined
   let cacheDirectory: string
+  let homeDirectory: string
 
   beforeEach(() => {
     originalCacheHome = process.env.XDG_CACHE_HOME
@@ -37,6 +38,11 @@ describe('OpenCode 2 plugin entrypoint', () => {
     delete process.env.LITELLM_BASE_URL
     delete process.env.LITELLM_API_KEY
     delete process.env.LITELLM_MASTER_KEY
+    // Isolate the box auth store: tests must never read the developer's real
+    // credentials, and stored-key fingerprints must be deterministic.
+    homeDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-home-'))
+    process.env.HOME = homeDirectory
+    __resetOpenCodeAuthCacheForTests()
   })
 
   afterEach(() => {
@@ -47,6 +53,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     restoreEnv('LITELLM_API_KEY', originalLiteLLMApiKey)
     restoreEnv('LITELLM_MASTER_KEY', originalLiteLLMMasterKey)
     if (cacheDirectory) rmSync(cacheDirectory, { recursive: true, force: true })
+    if (homeDirectory) rmSync(homeDirectory, { recursive: true, force: true })
     vi.restoreAllMocks()
   })
 
@@ -1486,7 +1493,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-credential-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory
     const baseURL = 'http://127.0.0.1:44447'
-    const cacheKey = buildCacheKey('litellm', baseURL, {}, {})
+    const cacheKey = buildCacheKey('litellm', baseURL, {}, {}, {}, 'old-key')
     writeModelCache(cacheKey, { 'cached-model': { name: 'Cached Model' } })
 
     const authorizationHeaders: string[] = []
@@ -1581,7 +1588,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-remove-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory
     const baseURL = 'http://127.0.0.1:44448'
-    const cacheKey = buildCacheKey('litellm', baseURL, {}, {})
+    const cacheKey = buildCacheKey('litellm', baseURL, {}, {}, {}, 'example-api-key')
     // Seed an old cache so the first transform adopts the cached model as
     // plugin-owned, and the later session refresh isn't throttled.
     const dateNow = vi.spyOn(Date, 'now').mockReturnValue(Date.now() - 10 * 60 * 1000)
@@ -1727,6 +1734,108 @@ describe('OpenCode 2 plugin entrypoint', () => {
     // same source the v1 entrypoint uses): a saved credential is the user's
     // explicit choice and beats the pod env / anonymous discovery.
     expect(authorizationHeaders.every((header) => header === 'Bearer legacy-stored-key')).toBe(true)
+
+    await cleanup?.()
+  })
+
+  it('refreshes a source when the first connection credential is saved after setup', async () => {
+    // Regression for the CodeRabbit review finding: setup may run with no
+    // active connection (usesConnectionCredential fixed to false); the user
+    // then saves a credential and the credential.switched handler must
+    // recompute the effective key instead of returning immediately and
+    // leaving the source on the environment key.
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-first-save-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    const baseURL = 'http://127.0.0.1:44453'
+
+    const authorizationHeaders: string[] = []
+    // The gateway returns a different model set once the saved credential is
+    // presented — the real scenario: the first save unlocks models the
+    // anonymous/environment key could not see, so the refresh must reload
+    // the provider registry with the new list.
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const authHeader = new Headers(init?.headers).get('Authorization') ?? ''
+      authorizationHeaders.push(authHeader)
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 })
+      }
+      const id = authHeader === 'Bearer just-saved-key' ? 'authenticated-model' : 'anonymous-model'
+      return new Response(
+        JSON.stringify({ data: [{ id, object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    const configuredProvider = {
+      id: 'litellm',
+      name: 'Configured LiteLLM',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      integrationID: 'litellm-auth',
+      settings: { baseURL: `${baseURL}/v1` },
+      headers: {},
+    }
+    let currentModels = new Map<string, Record<string, unknown>>()
+    const record = () => ({ provider: configuredProvider, models: currentModels })
+    const editor = {
+      list: () => [record()],
+      get: () => record(),
+      add: vi.fn(),
+      update: vi.fn((_id, update) => update(configuredProvider)),
+      remove: vi.fn(),
+      models: {
+        set: vi.fn((_id, models: Array<Record<string, unknown>>) => {
+          currentModels = new Map(models.map((model) => [String(model.id), model]))
+        }),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
+    }
+    let providerTransform: ((editor: unknown) => void) | undefined
+    const reload = vi.fn(async () => providerTransform?.(editor))
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [configuredProvider] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          providerTransform = transform
+          transform(editor)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload,
+      },
+      integration: {
+        connection: {
+          // First read (setup): no active connection yet. Second read (the
+          // save): the user's credential is now active.
+          active: vi
+            .fn()
+            .mockResolvedValueOnce(undefined)
+            .mockResolvedValueOnce({ key: 'just-saved-key' }),
+          resolve: vi.fn(async (connection: { key: string }) => ({
+            type: 'key',
+            key: connection.key,
+          })),
+        },
+      },
+      event: {
+        subscribe: () =>
+          (async function* () {
+            yield {
+              type: 'credential.switched',
+              data: { integrationID: 'litellm-auth' },
+            }
+          })(),
+      },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(2))
+    expect(authorizationHeaders).toContain('Bearer just-saved-key')
+    expect(configuredProvider.settings).not.toHaveProperty('apiKey')
 
     await cleanup?.()
   })

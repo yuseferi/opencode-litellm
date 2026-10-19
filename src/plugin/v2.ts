@@ -378,9 +378,12 @@ async function makeProviderSource(
   }
 
   const baseURL = normalizeBaseURL(detectedBaseURL)
+  // The cache key is isolated by the effective credential (a fingerprint, never
+  // the raw key): a credential change starts a fresh discovery instead of
+  // serving another credential's cached model list.
   const cacheKey = buildCacheKey(id, baseURL, filters, capabilities, {
     formatModelNames,
-  })
+  }, apiKey)
   const cacheEntry = readModelCacheEntry(cacheKey)
   let entries = cacheEntry?.models ?? null
   let responsesIds = cacheEntry?.responsesIds ?? []
@@ -537,7 +540,10 @@ async function refreshConnectionCredential(
   context: Context,
   source: ProviderSource,
 ): Promise<boolean> {
-  if (!source.integrationID || !source.usesConnectionCredential) return false
+  // The gate is the integration's presence, not the current credential choice:
+  // setup may run before the user saves a credential, and the first save must
+  // refresh this source instead of leaving it on the environment key.
+  if (!source.integrationID) return false
 
   try {
     const connection = await context.integration.connection.active(source.integrationID)
@@ -545,8 +551,16 @@ async function refreshConnectionCredential(
       ? await context.integration.connection.resolve(connection)
       : undefined
     const apiKey = credential?.type === 'key' ? credential.key : undefined
-    if (apiKey === source.apiKey) return false
-    source.apiKey = apiKey
+    const settingsApiKey = readString(source.settings.apiKey)
+    const nextUsesConnection = apiKey !== undefined && settingsApiKey === undefined
+    // Recompute the effective key: an explicit settings apiKey stays first, a
+    // connection credential takes over the environment/auto-detected key, and
+    // with no connection credential the current effective key stands.
+    const nextKey = settingsApiKey ?? apiKey ?? source.apiKey
+    if (nextKey === source.apiKey && nextUsesConnection === source.usesConnectionCredential) return false
+    source.apiKey = nextKey
+    source.usesConnectionCredential = nextUsesConnection
+    source.credentialReloadRequired = true
     return true
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

@@ -111,8 +111,16 @@ export function buildCacheKey(
   filters: { includeModels?: string[]; excludeModels?: string[] },
   capabilities: Record<string, Record<string, boolean>>,
   naming: { formatModelNames?: boolean } = {},
+  credential?: string,
 ): string {
-  const base = `${providerId}@${baseURL}`
+  let base = `${providerId}@${baseURL}`
+  // The credential fingerprint: a short hash (never the raw key) so a
+  // credential change isolates the cached model list — a key that exposes a
+  // different set of models must start a fresh discovery instead of serving
+  // another credential's entries.
+  if (credential) {
+    base += `@${createHash('sha256').update(credential).digest('hex').slice(0, 12)}`
+  }
   const rawNames = naming.formatModelNames === false
   const hasAdjustments =
     (filters.includeModels?.length ?? 0) > 0 ||
