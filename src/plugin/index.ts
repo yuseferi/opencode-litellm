@@ -761,9 +761,14 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         the plugin reads the stored key here and applies it to both its own
         discovery fetches and the completion-time provider options. Without it,
         a key-only proxy would fail discovery even though chat works.
+
+        Precedence rule: the stored credential — the user's explicit
+        choice made in the box — wins over the pod environment. The env is a
+        box-level fallback for users who have not saved a credential — never an
+        override of a user's saved key.
         */
         const storedKey = await getOpenCodeStoredApiKey(providerId)
-        const apiKey = configuredKey ?? envKey ?? storedKey
+        const apiKey = configuredKey ?? storedKey ?? envKey
         // Native `options.headers` and the legacy `customHeaders` both reach
         // discovery and the runtime, so a gateway that only sets one still
         // authenticates the plugin's own fetches.

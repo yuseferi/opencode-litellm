@@ -341,20 +341,23 @@ async function makeProviderSource(
     CHAT_PROVIDER_ID
   const configuredBaseURL = readString(settings.baseURL)
   const connectedApiKey = connected?.apiKey
-  const configuredApiKey =
-    readString(providerSettings.apiKey) ??
-    readString(pluginOptions.apiKey) ??
-    process.env.LITELLM_API_KEY ??
-    process.env.LITELLM_MASTER_KEY
-  // A provider bound to an integration relies on OpenCode for its credential
-  // even before one is connected. The plugin's own integration only counts
-  // once it actually resolved a key, so env/config setups are unaffected.
-  const usesConnectionCredential =
-    !configuredApiKey && Boolean(provider?.integrationID ?? connectedApiKey)
+  // Precedence rule: an explicit settings/plugin-options apiKey is the
+  // operator's deliberate config and stays first; then a credential the user
+  // saved in the box — the ACTIVE connection or the `/connect` entry in the
+  // box auth store — which wins over the pod environment. The env is a
+  // box-level fallback for users who have not saved a credential, never an
+  // override of the user's explicit choice.
+  const settingsApiKey = readString(providerSettings.apiKey) ?? readString(pluginOptions.apiKey)
+  const envApiKey = process.env.LITELLM_API_KEY ?? process.env.LITELLM_MASTER_KEY
+  // A config-defined provider carries no integrationID, so the host-integration
+  // path above cannot see its `/connect` key — read the box auth store
+  // directly, exactly like the v1 entrypoint does.
+  const storedKey = await getOpenCodeStoredApiKey(id)
+  const usesConnectionCredential = settingsApiKey === undefined && connectedApiKey !== undefined
   const integrationID =
     provider?.integrationID ??
-    (usesConnectionCredential && connectedApiKey ? LITELLM_INTEGRATION_ID : undefined)
-  const apiKey = configuredApiKey ?? connectedApiKey
+    (usesConnectionCredential ? LITELLM_INTEGRATION_ID : undefined)
+  const apiKey = settingsApiKey ?? connectedApiKey ?? storedKey ?? envApiKey
   const filters = readModelFilters(settings)
   const capabilities = parseModelCapabilities(settings.modelCapabilities)
   const compatibility = parseModelCompatibility(settings.modelCompatibility)

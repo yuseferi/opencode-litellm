@@ -1791,4 +1791,71 @@ describe('OpenCode 2 plugin entrypoint', () => {
     expect(configuredProvider.settings).not.toHaveProperty('apiKey')
     await cleanup?.()
   })
+
+  it('saved connection credential beats the pod env key', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-saved-over-env-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    process.env.LITELLM_API_KEY = 'stale-env-key'
+    const baseURL = 'http://127.0.0.1:44451'
+
+    const authorizationHeaders: string[] = []
+    globalThis.fetch = vi.fn(async (input, init) => {
+      authorizationHeaders.push(new Headers(init?.headers).get('Authorization') ?? '')
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 })
+      }
+      return new Response(
+        JSON.stringify({ data: [{ id: 'saved-model', object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    const configuredProvider = {
+      id: 'litellm',
+      name: 'Configured LiteLLM',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      integrationID: 'litellm-auth',
+      settings: { baseURL: `${baseURL}/v1` },
+      headers: {},
+    }
+    const editor = {
+      list: () => [],
+      get: () => undefined,
+      add: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: { set: vi.fn(), update: vi.fn(), remove: vi.fn() },
+    }
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [configuredProvider] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(editor as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      integration: {
+        connection: {
+          active: vi.fn(async () => ({ key: 'saved-user-key' })),
+          resolve: vi.fn(async (connection: { key: string }) => ({
+            type: 'key',
+            key: connection.key,
+          })),
+        },
+      },
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    expect(authorizationHeaders).toContain('Bearer saved-user-key')
+    expect(authorizationHeaders).not.toContain('Bearer stale-env-key')
+    expect(configuredProvider.settings).not.toHaveProperty('apiKey')
+    await cleanup?.()
+  })
 })
