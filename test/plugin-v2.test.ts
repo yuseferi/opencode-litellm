@@ -1660,7 +1660,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     await cleanup?.()
   })
 
-  it('does not fall back to the legacy OpenCode auth store for V2 credentials', async () => {
+  it('uses the stored OpenCode auth key for discovery when no v2 connection exists', async () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-legacy-auth-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory
     const home = mkdtempSync(join(tmpdir(), 'opencode-litellm-home-'))
@@ -1722,8 +1722,82 @@ describe('OpenCode 2 plugin entrypoint', () => {
     expect(editor.add).toHaveBeenCalledOnce()
     expect(configuredProvider.settings).not.toHaveProperty('apiKey')
     expect(authorizationHeaders.length).toBeGreaterThan(0)
-    expect(authorizationHeaders.every((header) => header === '')).toBe(true)
+    // A config-defined provider carries no integrationID, so the host-integration
+    // path cannot see the box auth store. The plugin reads the store directly (the
+    // same source the v1 entrypoint uses): a saved credential is the user's
+    // explicit choice and beats the pod env / anonymous discovery.
+    expect(authorizationHeaders.every((header) => header === 'Bearer legacy-stored-key')).toBe(true)
 
+    await cleanup?.()
+  })
+
+  it('stored auth key beats the pod env key when no v2 connection exists', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-stored-over-env-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    process.env.LITELLM_API_KEY = 'stale-env-key'
+    const home = mkdtempSync(join(tmpdir(), 'opencode-litellm-home-'))
+    process.env.HOME = home
+    const authDirectory = join(home, '.local', 'share', 'opencode')
+    mkdirSync(authDirectory, { recursive: true })
+    writeFileSync(
+      join(authDirectory, 'auth.json'),
+      JSON.stringify({ litellm: { type: 'api', key: 'valid-stored-key' } }),
+    )
+    __resetOpenCodeAuthCacheForTests()
+
+    const baseURL = 'http://127.0.0.1:44452'
+    const authorizationHeaders: string[] = []
+    globalThis.fetch = vi.fn(async (input, init) => {
+      authorizationHeaders.push(new Headers(init?.headers).get('Authorization') ?? '')
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 })
+      }
+      return new Response(
+        JSON.stringify({ data: [{ id: 'stored-model', object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    // The user's exact scenario: a config-defined provider (no integrationID —
+    // so the host-integration path is dead) with the pod env carrying the stale
+    // deployment key that 401s against the production gateway, while the box
+    // auth store holds the user's valid saved key.
+    const configuredProvider = {
+      id: 'litellm',
+      name: 'Configured LiteLLM',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      settings: { baseURL: `${baseURL}/v1` },
+      headers: {},
+    }
+    const editor = {
+      list: () => [],
+      get: () => undefined,
+      add: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: { set: vi.fn(), update: vi.fn(), remove: vi.fn() },
+    }
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [configuredProvider] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(editor as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    expect(authorizationHeaders).toContain('Bearer valid-stored-key')
+    expect(authorizationHeaders).not.toContain('Bearer stale-env-key')
+    expect(configuredProvider.settings).not.toHaveProperty('apiKey')
     await cleanup?.()
   })
 

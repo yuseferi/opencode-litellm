@@ -25,6 +25,7 @@ import {
   writeModelCache,
 } from '../utils/model-cache'
 import { normalizeBaseURL, autoDetectLiteLLM } from '../utils/litellm-api'
+import { getOpenCodeStoredApiKey } from '../utils/opencode-auth'
 import { parseModelCapabilities } from '../utils/model-capabilities'
 import type { ModelCapabilities } from '../utils/model-capabilities'
 import {
@@ -349,9 +350,11 @@ async function makeProviderSource(
   // override of the user's explicit choice.
   const settingsApiKey = readString(providerSettings.apiKey) ?? readString(pluginOptions.apiKey)
   const envApiKey = process.env.LITELLM_API_KEY ?? process.env.LITELLM_MASTER_KEY
-  // A config-defined provider carries no integrationID, so the host-integration
-  // path above cannot see its `/connect` key — read the box auth store
-  // directly, exactly like the v1 entrypoint does.
+  // The key OpenCode itself stored for this provider in the box auth store
+  // (/connect journey). A config-defined provider carries no integrationID, so
+  // the host-integration path above cannot see it — read the store directly,
+  // exactly like the v1 entrypoint does. Still ahead of the env: a saved
+  // credential is the user's explicit choice and beats the box-level fallback.
   const storedKey = await getOpenCodeStoredApiKey(id)
   const usesConnectionCredential = settingsApiKey === undefined && connectedApiKey !== undefined
   const integrationID =
