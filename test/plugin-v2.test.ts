@@ -1840,6 +1840,110 @@ describe('OpenCode 2 plugin entrypoint', () => {
     await cleanup?.()
   })
 
+  it('falls back to the stored/env key when the connection credential is removed', async () => {
+    // Regression for the CodeRabbit review finding: when the active connection
+    // disappears, the refresh must fall back through the stored credential /
+    // env key (the same precedence makeProviderSource uses) instead of
+    // retaining the previous connection key, which runtimeSettings would
+    // materialize into provider settings.
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-removed-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    process.env.LITELLM_API_KEY = 'env-fallback-key'
+    const baseURL = 'http://127.0.0.1:44459'
+
+    const authorizationHeaders: string[] = []
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const authHeader = new Headers(init?.headers).get('Authorization') ?? ''
+      authorizationHeaders.push(authHeader)
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 })
+      }
+      const id = authHeader === 'Bearer env-fallback-key' ? 'env-model' : 'connection-model'
+      return new Response(
+        JSON.stringify({ data: [{ id, object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    const configuredProvider = {
+      id: 'litellm',
+      name: 'Configured LiteLLM',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      integrationID: 'litellm-auth',
+      settings: { baseURL: `${baseURL}/v1` },
+      headers: {},
+    }
+    let currentModels = new Map<string, Record<string, unknown>>()
+    const record = () => ({ provider: configuredProvider, models: currentModels })
+    const editor = {
+      list: () => [record()],
+      get: () => record(),
+      add: vi.fn(),
+      update: vi.fn((_id, update) => update(configuredProvider)),
+      remove: vi.fn(),
+      models: {
+        set: vi.fn((_id, models: Array<Record<string, unknown>>) => {
+          currentModels = new Map(models.map((model) => [String(model.id), model]))
+        }),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
+    }
+    let providerTransform: ((editor: unknown) => void) | undefined
+    const reload = vi.fn(async () => providerTransform?.(editor))
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [configuredProvider] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          providerTransform = transform
+          transform(editor)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload,
+      },
+      integration: {
+        connection: {
+          // First read (setup): the connection exists. Second read (the
+          // switch): the connection was removed.
+          active: vi
+            .fn()
+            .mockResolvedValueOnce({ key: 'connection-key' })
+            .mockResolvedValueOnce(undefined),
+          resolve: vi.fn(async (connection: { key: string }) => ({
+            type: 'key',
+            key: connection.key,
+          })),
+        },
+      },
+      event: {
+        subscribe: () =>
+          (async function* () {
+            yield {
+              type: 'credential.switched',
+              data: { integrationID: 'litellm-auth' },
+            }
+          })(),
+      },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(2))
+    expect(authorizationHeaders).toContain('Bearer env-fallback-key')
+    // The setup's discovery legitimately used the connection key; the LAST
+    // request (after the removal) must carry the env fallback instead.
+    expect(authorizationHeaders[authorizationHeaders.length - 1]).toBe('Bearer env-fallback-key')
+    // The env fallback is materialized into provider settings (the source no
+    // longer uses the connection credential, so runtimeSettings publishes it).
+    expect(configuredProvider.settings).toMatchObject({ apiKey: 'env-fallback-key' })
+
+    await cleanup?.()
+  })
+
   it('stored auth key beats the pod env key when no v2 connection exists', async () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-stored-over-env-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory

@@ -550,13 +550,26 @@ async function refreshConnectionCredential(
     const credential = connection
       ? await context.integration.connection.resolve(connection)
       : undefined
-    const apiKey = credential?.type === 'key' ? credential.key : undefined
+    const connectionKey = credential?.type === 'key' ? credential.key : undefined
     const settingsApiKey = readString(source.settings.apiKey)
-    const nextUsesConnection = apiKey !== undefined && settingsApiKey === undefined
-    // Recompute the effective key: an explicit settings apiKey stays first, a
-    // connection credential takes over the environment/auto-detected key, and
-    // with no connection credential the current effective key stands.
-    const nextKey = settingsApiKey ?? apiKey ?? source.apiKey
+    let nextKey: string | undefined
+    let nextUsesConnection: boolean
+    if (connectionKey !== undefined) {
+      // An explicit settings apiKey stays first; a connection credential takes
+      // over the environment/auto-detected key.
+      nextKey = settingsApiKey ?? connectionKey
+      nextUsesConnection = settingsApiKey === undefined
+    } else {
+      // The connection credential is gone (the connection was removed or its
+      // credential cleared): fall back through the stored credential / env key
+      // — the same precedence `makeProviderSource` uses — instead of retaining
+      // the previous connection key, which `runtimeSettings` would otherwise
+      // materialize into provider settings.
+      const storedKey = await getOpenCodeStoredApiKey(source.id)
+      const envKey = process.env.LITELLM_API_KEY ?? process.env.LITELLM_MASTER_KEY
+      nextKey = settingsApiKey ?? storedKey ?? envKey
+      nextUsesConnection = false
+    }
     if (nextKey === source.apiKey && nextUsesConnection === source.usesConnectionCredential) return false
     source.apiKey = nextKey
     source.usesConnectionCredential = nextUsesConnection
