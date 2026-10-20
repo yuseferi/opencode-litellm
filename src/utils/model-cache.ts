@@ -29,7 +29,7 @@ export interface ModelHints {
  * from older plugin versions are ignored rather than deserialized into
  * an incompatible structure.
  */
-const CACHE_VERSION = 5
+const CACHE_VERSION = 6
 
 /**
  * Maximum age of a cache entry before it's treated as a miss. Without a

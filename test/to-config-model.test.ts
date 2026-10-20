@@ -57,3 +57,25 @@ describe('toConfigModel naming (formatModelNames)', () => {
     expect(toConfigModel(embedding, undefined, true)).toBeNull()
   })
 })
+
+describe('toConfigModel temperature', () => {
+  const chat = model('company/chat')
+
+  it('declares temperature when supported_openai_params lists it', () => {
+    expect(
+      toConfigModel(chat, { supported_openai_params: ['max_tokens', 'temperature'] })?.temperature,
+    ).toBe(true)
+  })
+
+  it('leaves temperature unset when the parameter is not listed', () => {
+    expect(
+      toConfigModel(chat, { supported_openai_params: ['max_tokens', 'reasoning_effort'] })
+        ?.temperature,
+    ).toBeUndefined()
+    expect(toConfigModel(chat, { supported_openai_params: null })?.temperature).toBeUndefined()
+  })
+
+  it('leaves temperature unset when /v1/model/info is unavailable', () => {
+    expect(toConfigModel(chat)?.temperature).toBeUndefined()
+  })
+})

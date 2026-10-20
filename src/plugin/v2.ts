@@ -240,6 +240,8 @@ function toProviderModels(
           tools: entry.tool_call === undefined ? defaults.capabilities.tools : entry.tool_call === true,
           input,
           output,
+          // Left unset (unknown) unless the model was declared to accept it.
+          ...(entry.temperature === true ? { temperature: true } : {}),
         },
         cost,
         variants,
