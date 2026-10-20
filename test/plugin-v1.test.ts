@@ -145,7 +145,7 @@ describe('OpenCode 1 config hook', () => {
 
     await runConfigHook(baseURL)
 
-    const cacheKey = buildCacheKey('litellm', 'http://127.0.0.1:45557', {}, {})
+    const cacheKey = buildCacheKey('litellm', 'http://127.0.0.1:45557', {}, {}, {}, 'example-key')
     expect(readModelCacheEntry(cacheKey)?.hints).toEqual({
       claude: { acceptsCacheControl: true, adaptiveThinking: false, thinkingAlwaysOn: false },
       gpt: { acceptsCacheControl: false, adaptiveThinking: false, thinkingAlwaysOn: false },
@@ -173,7 +173,7 @@ describe('OpenCode 1 config hook', () => {
     const dateNow = vi.spyOn(Date, 'now').mockReturnValue(started - 10 * 60 * 1000)
     await plugin.config!(config as never)
     dateNow.mockRestore()
-    const cacheKey = buildCacheKey('litellm', 'http://127.0.0.1:45558', {}, {})
+    const cacheKey = buildCacheKey('litellm', 'http://127.0.0.1:45558', {}, {}, {}, 'example-key')
     expect(readModelCacheEntry(cacheKey)?.hints).toEqual({
       claude: { acceptsCacheControl: true, adaptiveThinking: false, thinkingAlwaysOn: false },
     })

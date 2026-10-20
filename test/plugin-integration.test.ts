@@ -275,7 +275,7 @@ describe('connect dialog integration', () => {
     }
     const context = {
       app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
-      options: { baseURL: 'http://127.0.0.1:44503/v1' },
+      options: { baseURL: 'http://127.0.0.1:44503/v1', apiKey: 'config-key' },
       provider: {
         list: vi.fn(async () => ({ data: [] })),
         transform: vi.fn(async (transform: (editor: unknown) => void) => {
@@ -291,15 +291,73 @@ describe('connect dialog integration', () => {
     const cleanup = await plugin.setup(context)
 
     expect(registered).toHaveLength(1)
-    // The configured URL and env key both beat the dialog answers; with an
-    // explicit key the provider is not bound to the integration.
+    // Explicit operator config (the URL and apiKey) beats the dialog answers;
+    // with an explicit key the provider is not bound to the integration.
     expect(registered[0].info.settings).toMatchObject({
       baseURL: 'http://127.0.0.1:44503/v1',
-      apiKey: 'env-key',
+      apiKey: 'config-key',
     })
     expect(registered[0].info).not.toHaveProperty('integrationID')
-    expect(authorizationHeaders).toContain('Bearer env-key')
+    expect(authorizationHeaders).toContain('Bearer config-key')
     expect(authorizationHeaders).not.toContain('Bearer connected-key')
+    expect(authorizationHeaders).not.toContain('Bearer env-key')
+
+    await cleanup?.()
+  })
+
+  it('the connected credential beats the pod env key', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-connect-over-env-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    process.env.LITELLM_API_KEY = 'stale-env-key'
+
+    const authorizationHeaders: string[] = []
+    globalThis.fetch = vi.fn(async (input, init) => {
+      authorizationHeaders.push(new Headers(init?.headers).get('Authorization') ?? '')
+      return discoveryFetch([{ id: 'connected-model' }])(input)
+    })
+
+    const integration = makeIntegration()
+    integration.active.mockResolvedValue({ type: 'credential', id: 'cred-1' })
+    integration.resolve.mockResolvedValue({
+      type: 'key',
+      key: 'connected-key',
+      configuration: { baseURL: 'http://127.0.0.1:44511/v1' },
+    })
+
+    const registered: Array<{ info: Record<string, unknown> }> = []
+    const editor = {
+      list: () => [],
+      get: () => undefined,
+      add: (entry: { info: Record<string, unknown> }) => {
+        registered.push(entry)
+      },
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: { set: vi.fn(), update: vi.fn(), remove: vi.fn() },
+    }
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(editor as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      integration,
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    expect(registered).toHaveLength(1)
+    // A credential the user saved in the dialog wins over the box env key,
+    // which is only a fallback.
+    expect(authorizationHeaders).toContain('Bearer connected-key')
+    expect(authorizationHeaders).not.toContain('Bearer stale-env-key')
+    expect(registered[0].info.settings).not.toHaveProperty('apiKey')
 
     await cleanup?.()
   })
