@@ -287,6 +287,17 @@ export function toConfigModel(
   if (model.supports_vision) {
     entry.attachment = true
   }
+  // Declare `temperature` only when `/v1/model/info` lists it among the model's
+  // `supported_openai_params`. OpenCode sends a sampling temperature (its own
+  // per-model default, or one set on the agent) only for models flagged as
+  // supporting it, so a model that accepts the parameter would otherwise
+  // silently ignore the user's setting. When the parameter is not listed, or
+  // `/v1/model/info` is unavailable, the field stays unset and OpenCode keeps
+  // its default behavior (some deployments, such as reasoning-only endpoints or
+  // guardrail classifiers, reject the parameter outright).
+  if (info?.supported_openai_params?.includes('temperature')) {
+    entry.temperature = true
+  }
   // Only emit `cost` when LiteLLM actually reported a price. Omitting
   // it (rather than defaulting to 0) lets OpenCode/models.dev fall back
   // to their own default instead of us asserting "this model is free"

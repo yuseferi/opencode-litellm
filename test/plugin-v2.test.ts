@@ -306,6 +306,77 @@ describe('OpenCode 2 plugin entrypoint', () => {
     expect(disposeTransform).toHaveBeenCalledOnce()
   })
 
+  it('declares temperature support only for models that list it', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-temperature-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                model_name: 'accepts-temperature',
+                model_info: { mode: 'chat', supported_openai_params: ['max_tokens', 'temperature'] },
+              },
+              {
+                model_name: 'rejects-temperature',
+                model_info: { mode: 'chat', supported_openai_params: ['max_tokens'] },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: 'accepts-temperature', object: 'model' },
+            { id: 'rejects-temperature', object: 'model' },
+          ],
+        }),
+        { status: 200 },
+      )
+    })
+
+    const registered: Array<{ models: Array<Record<string, unknown>> }> = []
+    const editor = {
+      list: () => [],
+      get: () => undefined,
+      add: (entry: { models: Array<Record<string, unknown>> }) => {
+        registered.push(entry)
+      },
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: { set: vi.fn(), update: vi.fn(), remove: vi.fn() },
+    }
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: { baseURL: 'http://127.0.0.1:44447/v1' },
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(editor)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    const byId = Object.fromEntries(registered[0].models.map((model) => [model.id, model]))
+    expect((byId['accepts-temperature'].capabilities as Record<string, unknown>).temperature).toBe(
+      true,
+    )
+    // Not listed: the capability stays unknown rather than being asserted false.
+    expect(
+      (byId['rejects-temperature'].capabilities as Record<string, unknown>).temperature,
+    ).toBeUndefined()
+    await cleanup?.()
+  })
+
   it('applies modelCompatibility overrides on top of inferred compatibility', async () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory
