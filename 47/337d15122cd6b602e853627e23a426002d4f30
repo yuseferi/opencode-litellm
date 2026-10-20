@@ -1,0 +1,27 @@
+test/plugin-v2.test.ts
+  s_582409d230a625::t_71f3666992f8d8 1959,2094
+  s_582409d230a625::t_e5094030d8965a 670
+  s_582409d230a625::t_af59d0f703dfc5 20-28
+  s_582409d230a625::t_32e1feba50233d 1860
+  s_582409d230a625::t_9c0dde239e7f95 1871,1945,1948,1951
+test/plugin-integration.test.ts
+  s_582409d230a625::t_9f430bc1528edd 320
+  s_582409d230a625::t_0a20ad8dad878f 13-21
+  s_582409d230a625::t_42ec59a86f4988 287,307,310
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "47337d15122cd6b602e853627e23a426002d4f30",
+  "prompts": {},
+  "sessions": {
+    "s_582409d230a625": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_ec10c9601ffeiFjL42YIklryIU",
+        "model": "unknown"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
