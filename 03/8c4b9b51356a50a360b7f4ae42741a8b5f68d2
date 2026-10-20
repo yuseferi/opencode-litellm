@@ -1,0 +1,22 @@
+CHANGELOG.md
+  s_582409d230a625::t_a191cb3d756bba 58
+test/plugin-v1.test.ts
+  s_582409d230a625::t_3f8eabc8b116d4 176
+  s_582409d230a625::t_e5e9706ec4ff86 148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "038c4b9b51356a50a360b7f4ae42741a8b5f68d2",
+  "prompts": {},
+  "sessions": {
+    "s_582409d230a625": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_ec10c9601ffeiFjL42YIklryIU",
+        "model": "unknown"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
