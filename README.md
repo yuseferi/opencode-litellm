@@ -413,6 +413,49 @@ If your LiteLLM catalog mixes naming conventions from different teams or environ
 - Filtering happens before the on-disk cache is written, so each provider's cached view respects its own filters.
 - Provider IDs beginning with `litellm-` are recognized automatically. Add `settings.litellm: true` to mark a provider with another ID.
 
+### Declaring providers in the plugin options (`providers`, OpenCode 2)
+
+On OpenCode 2, providers declared under the config's `providers` key are registered by the host *after* plugin setup. A one-shot command such as `opencode run` resolves its model before the plugin has published anything, so with a cold cache it fails with `Model unavailable`. Declaring the provider in the plugin's own options avoids that, because the plugin then discovers models during setup. The catch is that the flat options describe a single provider, and when the same package is listed twice only one of the entries takes effect.
+
+To get several providers (for example one proxy split by prefix, or two different proxies) and still start on a cold cache, declare them under `providers` in the plugin options, keyed by provider id and written the way the config's `providers` key is:
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-plugin-litellm",
+      "options": {
+        "providers": {
+          "litellm": {
+            "name": "Prod",
+            "settings": {
+              "baseURL": "http://localhost:4000/v1",
+              "apiKey": "{env:LITELLM_API_KEY}",
+              "excludeModels": ["staging/*"]
+            }
+          },
+          "litellm-staging": {
+            "name": "Staging",
+            "settings": {
+              "baseURL": "http://staging.internal:4000/v1",
+              "apiKey": "{env:STAGING_LITELLM_API_KEY}",
+              "includeModels": ["staging/*"]
+            }
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+- A provider declared here goes through the same code as one declared in the config, so a block can be moved between the two places as is. It reads `name` (defaults to the id), `package` (defaults to the OpenAI-compatible runtime), `settings` (everything documented above, including `baseURL`, `apiKey`, `includeModels` and `excludeModels`) and `headers`.
+- Each provider is self-contained. Its address, key, headers and filters come from its own declaration, and the plugin-wide options (the flat keys next to `providers`) are not applied to it, so one provider can never pick up another's credentials.
+- Providers are discovered at the same time, so a slow proxy costs the longest wait instead of the sum.
+- If the config's `providers` key declares the same id, the plugin options win.
+- Entries that are not objects are ignored. Without `providers`, nothing changes.
+- This applies to OpenCode 2 only. On OpenCode 1, declare the providers under the config's `provider` key as shown above.
+
 ### Correcting capability flags (`modelCapabilities`)
 
 Model classification (tool-call badge, attachments, reasoning, input modalities) leans on the capability flags LiteLLM reports via `/v1/model/info`. If your proxy doesn't expose that endpoint, or reports a flag that doesn't match your deployment, override flags per model id:

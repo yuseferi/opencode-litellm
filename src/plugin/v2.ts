@@ -122,6 +122,38 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {}
 }
 
+/**
+ * Providers declared in the plugin options under `providers`, keyed by provider
+ * id, in the same shape OpenCode 2 accepts under the config's `providers` key
+ * (`name`, `package`, `settings`, `headers`). They go through the same code
+ * path as a provider declared in the config, with one difference that matters:
+ * they exist during `setup`, so a one-shot `opencode run` on a cold cache can
+ * already use them. The host only registers the config's `providers` after
+ * plugin setup, and it keeps a single instance per plugin id, so a second
+ * entry of this package cannot declare them.
+ *
+ * Each provider is self-contained: its address, credentials, filters and
+ * headers come from its own declaration, and the plugin-wide options are not
+ * applied to it. Anything that is not an object is ignored.
+ */
+function readDeclaredProviders(options: Record<string, unknown>): ProviderInfo[] {
+  return Object.entries(asRecord(options.providers)).flatMap(([id, value]) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return []
+    const entry = value as Record<string, unknown>
+    const info = Provider.Info.empty(Provider.ID.make(id))
+    return [
+      {
+        ...info,
+        name: readString(entry.name) ?? id,
+        activation: 'enabled',
+        ...(readString(entry.package) ? { package: readString(entry.package)! } : {}),
+        settings: asRecord(entry.settings),
+        headers: readHeaders(entry.headers),
+      } as ProviderInfo,
+    ]
+  })
+}
+
 function readHeaders(value: unknown): Record<string, string> {
   const result: Record<string, string> = {}
   for (const [key, header] of Object.entries(asRecord(value))) {
@@ -638,9 +670,14 @@ async function reconcileProviderSources(
   context: Context,
   pluginOptions: Record<string, unknown>,
   sources: Map<string, ProviderSource>,
+  declaredIds: ReadonlySet<string> = new Set(),
 ): Promise<ProviderSource[]> {
   const changed: ProviderSource[] = []
   for (const provider of await listMatchingProviders(context)) {
+    // A provider declared in the plugin options is explicit plugin config. The
+    // host reflects the plugin's own publication back under the same id, and a
+    // config declaration of the same id is a conflict the options win.
+    if (declaredIds.has(provider.id)) continue
     const existing = sources.get(provider.id)
     // Skip sources that are both configured (not a fallback) and already
     // published; a pending configured source must be returned so it is retried.
@@ -720,7 +757,12 @@ const definition = Plugin.define({
 
     initV2Logging()
 
-    const pluginOptions = asRecord(context.options)
+    const rawOptions = asRecord(context.options)
+    const declaredInfos = readDeclaredProviders(rawOptions)
+    // `providers` is consumed only when it declares something. Any other value
+    // keeps being handed on with the rest of the options, as before.
+    const { providers: _declared, ...withoutProviders } = rawOptions
+    const pluginOptions = declaredInfos.length > 0 ? withoutProviders : rawOptions
     const sources = new Map<string, ProviderSource>()
     // Providers the dialog replaced under a new id; the transform below
     // removes them from the registry on the next reload.
@@ -731,10 +773,21 @@ const definition = Plugin.define({
     // integration API, or a failed registration, keeps every other auth path.
     const integrationRegistration = await registerLiteLLMIntegration(context)
 
+    // Providers declared in the plugin options are discovered at once, so a slow
+    // gateway costs the longest wait, not the sum (the host gives setup ~5 s).
+    // They are self-contained, hence no plugin-wide options.
+    const declaredIds = new Set<string>(declaredInfos.map((info) => info.id))
+    if (declaredInfos.length > 0) {
+      const declared = await Promise.all(
+        declaredInfos.map((info) => makeProviderSource(context, info, {})),
+      )
+      for (const source of declared) if (source) sources.set(source.id, source)
+    }
+
     // First pass. On OpenCode 2 the host has not registered user-configured
     // providers yet, so this typically finds only built-ins; the event loop
     // below reconciles again when they appear.
-    await reconcileProviderSources(context, pluginOptions, sources)
+    await reconcileProviderSources(context, pluginOptions, sources, declaredIds)
     // With no configured provider, fall back to purely option/env-driven
     // discovery so `LITELLM_BASE_URL` and plugin options keep working.
     if (sources.size === 0) {
