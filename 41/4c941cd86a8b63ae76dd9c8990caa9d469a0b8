@@ -1,0 +1,19 @@
+src/plugin/v2.ts
+  s_582409d230a625::t_9f64440afd72c2 344-356,359-360
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "414c941cd86a8b63ae76dd9c8990caa9d469a0b8",
+  "prompts": {},
+  "sessions": {
+    "s_582409d230a625": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_ec10c9601ffeiFjL42YIklryIU",
+        "model": "unknown"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
