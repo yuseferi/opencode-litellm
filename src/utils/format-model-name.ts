@@ -12,6 +12,17 @@ function stripVersionSuffix(part: string): string {
 }
 
 /**
+ * Like `looksLikeVersionComponent`, but tolerates a single leading
+ * version letter: `v3`, `k2`, `m2`. Dotted ids like `deepseek-v3.2`
+ * or `kimi-k2.5` have their version split apart by the tokenizer,
+ * and the letter-prefixed half must still merge back with the digits
+ * after the dot.
+ */
+function looksLikePrefixedVersionComponent(token: string): boolean {
+  return /^[a-z]?\d{1,2}$/i.test(token)
+}
+
+/**
  * Heuristic: does this numeric token look like a real version component
  * (single or double digit) rather than a date stamp or build number?
  *
@@ -31,6 +42,17 @@ function looksLikeVersionComponent(token: string): boolean {
  * version pair, but the formatter would otherwise render it as
  * "Claude Opus 4 5".
  *
+ * The left-hand token may also carry a single version letter (`v3`,
+ * `k2`, `m2`): ids like `deepseek-v3.2` or `kimi-k2.5` get their dot
+ * split apart by the tokenizer and must re-join as `v3.2` / `k2.5`,
+ * never render as "DeepSeek V3 2" / "Kimi K2 5".
+ * Such pairs are lower confidence than pure numeric ones, so they
+ * only merge when the id contains no pure numeric pair — otherwise a
+ * quantization token like `q4_0` (tokenised as `q4` + `0`) would
+ * steal the merge and `llama-3.1-8b-instruct-q4_0` would render
+ * "Llama 3 1 8B Instruct Q4.0" instead of "Llama 3.1 8B Instruct
+ * Q4 0".
+ *
  * Conservative on purpose:
  *   - Only the FIRST mergeable pair scanning from the right is collapsed:
  *     `gpt-3-5-turbo-16k` merges `3-5` into `3.5` and stops there.
@@ -46,10 +68,11 @@ function looksLikeVersionComponent(token: string): boolean {
  *     not "Claude Opus 4 5 20251101".
  */
 function joinTrailingVersionPair(tokens: string[]): string[] {
+  let prefixedMerge: string[] | undefined
   for (let i = tokens.length - 1; i >= 1; i--) {
     const a = tokens[i - 1]
     const b = tokens[i]
-    if (looksLikeVersionComponent(a) && looksLikeVersionComponent(b)) {
+    if (looksLikePrefixedVersionComponent(a) && looksLikeVersionComponent(b)) {
       const prev = tokens[i - 2]
       const next = tokens[i + 1]
       const prevIsShortNumeric = prev !== undefined && looksLikeVersionComponent(prev)
@@ -59,11 +82,16 @@ function joinTrailingVersionPair(tokens: string[]): string[] {
         (next === undefined || nextIsDateStamp || !/^\d+$/.test(next))
       ) {
         const merged = [...tokens.slice(0, i - 1), `${a}.${b}`, ...tokens.slice(i + 1)]
-        return merged
+        if (looksLikeVersionComponent(a)) {
+          return merged
+        }
+        if (prefixedMerge === undefined) {
+          prefixedMerge = merged
+        }
       }
     }
   }
-  return tokens
+  return prefixedMerge ?? tokens
 }
 
 /**
@@ -101,7 +129,11 @@ export function categorizeModel(model: LiteLLMModel): 'chat' | 'embedding' | 'im
  *   - Collapse a trailing pair of bare numeric tokens into a single
  *     dotted version. Anthropic uses dash-only ids — `claude-opus-4-7`
  *     would otherwise render as "Claude Opus 4 7" instead of
- *     "Claude Opus 4.7".
+ *     "Claude Opus 4.7". The left-hand token may carry a version
+ *     letter, so `deepseek-v3.2` renders "DeepSeek V3.2", not
+ *     "Deepseek V3 2".
+ *   - Keep the official casing of known brand names (GLM, DeepSeek,
+ *     MiniMax) instead of generic title-case.
  *
  * Examples:
  *   "openai/gpt-4o-mini"                  -> "GPT 4o Mini"
@@ -110,6 +142,10 @@ export function categorizeModel(model: LiteLLMModel): 'chat' | 'embedding' | 'im
  *   "claude-sonnet-4-6@default"           -> "Claude Sonnet 4.6"
  *   "bedrock/amazon.nova-pro-v1"          -> "Amazon Nova Pro V1"
  *   "qwen/qwen3-30b-a3b"                  -> "Qwen3 30B A3B"
+ *   "litellm/deepseek-v3.2"               -> "DeepSeek V3.2"
+ *   "litellm/glm-5.3"                     -> "GLM 5.3"
+ *   "litellm/kimi-k2.5"                   -> "Kimi K2.5"
+ *   "litellm/minimax-m2.5"                -> "MiniMax M2.5"
  */
 export function formatModelName(model: LiteLLMModel): string {
   const { id } = model
@@ -124,9 +160,16 @@ export function formatModelName(model: LiteLLMModel): string {
   const modelPart = stripVersionSuffix(afterProvider)
 
   const acronyms = new Set([
-    'gpt', 'oss', 'api', 'gguf', 'ggml', 'nomic', 'vl', 'it', 'mlx',
+    'gpt', 'glm', 'oss', 'api', 'gguf', 'ggml', 'nomic', 'vl', 'it', 'mlx',
     'llm', 'ai', 'sdk', 'aws', 'gcp', 'tts', 'stt', 'mm',
   ])
+
+  // Mixed-case brand names that generic title-case would mangle
+  // ("Deepseek", "Minimax").
+  const brandNames: Record<string, string> = {
+    deepseek: 'DeepSeek',
+    minimax: 'MiniMax',
+  }
 
   const rawTokens = modelPart
     .split(/[-_.]/) // split on -, _ and .
@@ -138,6 +181,7 @@ export function formatModelName(model: LiteLLMModel): string {
   // when both sides are pure digits).
   const tokens = joinTrailingVersionPair(rawTokens).map((token) => {
     const lower = token.toLowerCase()
+    if (brandNames[lower]) return brandNames[lower]
     if (acronyms.has(lower)) return token.toUpperCase()
     // sizes (30b, 7b, 4k...)
     if (/^\d+[bkmg]$/i.test(token)) return token.toUpperCase()

@@ -15,6 +15,14 @@ describe('formatModelName', () => {
     ['claude-sonnet-4-6@default', 'Claude Sonnet 4.6'],
     ['bedrock/amazon.nova-pro-v1', 'Amazon Nova Pro V1'],
     ['qwen/qwen3-30b-a3b', 'Qwen3 30B A3B'],
+    ['gemini/gemini-2.5-flash', 'Gemini 2.5 Flash'],
+    ['openai/whisper-large-v3', 'Whisper Large V3'],
+    ['gpt/dall-e-3', 'Dall E 3'],
+    ['llama-3.1-8b-instruct-q4_0', 'Llama 3.1 8B Instruct Q4 0'],
+    ['litellm/deepseek-v3.2', 'DeepSeek V3.2'],
+    ['litellm/glm-5.3', 'GLM 5.3'],
+    ['litellm/kimi-k2.5', 'Kimi K2.5'],
+    ['litellm/minimax-m2.5', 'MiniMax M2.5'],
   ]
 
   it.each(cases)('formats %s as %s', (id, expected) => {
