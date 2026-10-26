@@ -591,6 +591,35 @@ the proxy is reachable again.
 </details>
 
 <details>
+<summary><b>Why does the first <code>opencode run</code> fail with <code>Model unavailable: litellm/…</code> on OpenCode 2?</b></summary>
+
+This happens only on OpenCode 2, in a one-shot command (`opencode run`, CI jobs, scripts), when the plugin has no model cache yet. That covers the first run, a cleared or expired cache, and a changed config or credential. OpenCode registers the providers declared under `providers.*` only after plugin setup returns, so the plugin can't discover their models during setup. Discovery starts right after that, but a one-shot command has already resolved its model and fails before the models arrive. With `--standalone`, the process usually exits before discovery reaches the disk cache, so running it again fails the same way. Interactive sessions (TUI, web, desktop) and `opencode serve` aren't affected. This is how the OpenCode host orders startup ([anomalyco/opencode#57421](https://github.com/anomalyco/opencode/issues/57421)), not a plugin bug.
+
+Workarounds:
+
+- **Warm the cache once.** Open an interactive session or run `opencode serve` until the models appear, then stop it. One-shot runs use the cache until it expires (7 days) or the config or credential changes.
+- **Pass the connection as plugin options** for CI and scripts. Plugin options are available during setup, so discovery finishes before the command resolves its model, even with a cold cache:
+
+  ```jsonc
+  {
+    "plugins": [
+      {
+        "package": "opencode-plugin-litellm@latest",
+        "options": {
+          "baseURL": "https://litellm.internal.example.com/v1",
+          "apiKey": "{env:LITELLM_API_KEY}"
+        }
+      }
+    ]
+  }
+  ```
+
+  One plugin entry describes one provider. To [split one proxy into several providers](#splitting-one-proxy-into-multiple-providers-includemodels--excludemodels) in a cold one-shot run, warm the cache first.
+
+The OpenCode feature request for a readiness latch ([anomalyco/opencode#56119](https://github.com/anomalyco/opencode/issues/56119)) would remove the need for either workaround.
+</details>
+
+<details>
 <summary><b>Will my hand-curated model entries be overwritten?</b></summary>
 
 No. The merge is additive: anything you've already defined under `providers.litellm.models` is preserved. Discovered models are only added if their key isn't already present.
