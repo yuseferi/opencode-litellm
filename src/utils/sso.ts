@@ -606,6 +606,7 @@ async function startCliSso(root: string, headers: ProxyHeaders): Promise<CliSsoS
   const response = await fetch(`${root}/sso/cli/start`, {
     method: 'POST',
     headers,
+    redirect: 'manual',
     signal: requestSignal(),
   })
   if (response.status === 404 || response.status === 405) return undefined
@@ -664,6 +665,7 @@ async function pollCliSso(
     try {
       response = await fetch(pollUrl, {
         headers: { ...headers, 'x-litellm-cli-poll-secret': start.pollSecret },
+        redirect: 'manual',
         signal: requestSignal(),
       })
     } catch {
@@ -728,6 +730,7 @@ async function generateVirtualKey(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({}),
+    redirect: 'manual',
     signal: requestSignal(),
   })
   if (!response.ok) throw new Error(`/key/generate failed (HTTP ${response.status})`)
