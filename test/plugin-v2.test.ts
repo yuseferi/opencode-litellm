@@ -10,7 +10,7 @@ import {
   readModelCacheSavedAt,
   writeModelCache,
 } from '../src/utils/model-cache'
-import { __resetOpenCodeAuthCacheForTests } from '../src/utils/opencode-auth'
+import { resetOpenCodeAuthCache } from '../src/utils/opencode-auth'
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name]
@@ -51,7 +51,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     // credentials, and stored-key fingerprints must be deterministic.
     homeDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-home-'))
     process.env.HOME = homeDirectory
-    __resetOpenCodeAuthCacheForTests()
+    resetOpenCodeAuthCache()
   })
 
   afterEach(() => {
@@ -1618,7 +1618,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     const active = vi
       .fn()
       .mockResolvedValueOnce({ key: 'old-key' })
-      .mockResolvedValueOnce({ key: 'new-key' })
+      .mockResolvedValue({ key: 'new-key' })
     const reload = vi.fn(async () => providerTransform?.(editor))
     const context = {
       app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
@@ -1655,7 +1655,9 @@ describe('OpenCode 2 plugin entrypoint', () => {
     const cleanup = await plugin.setup(context)
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(2))
 
-    expect(active).toHaveBeenCalledTimes(2)
+    // Setup, the switch, and the rediscovery, which resolves the connection
+    // again so a rotating sign-in token is fresh.
+    expect(active).toHaveBeenCalledTimes(3)
     expect(authorizationHeaders).toContain('Bearer new-key')
     // The connection-managed credential is used for discovery but must not
     // be materialized into provider settings — OpenCode injects it itself.
@@ -1758,7 +1760,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
       join(authDirectory, 'auth.json'),
       JSON.stringify({ litellm: { type: 'api', key: 'legacy-stored-key' } }),
     )
-    __resetOpenCodeAuthCacheForTests()
+    resetOpenCodeAuthCache()
 
     const baseURL = 'http://127.0.0.1:44449'
     const authorizationHeaders: string[] = []
@@ -2036,7 +2038,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
       join(authDirectory, 'auth.json'),
       JSON.stringify({ litellm: { type: 'api', key: 'valid-stored-key' } }),
     )
-    __resetOpenCodeAuthCacheForTests()
+    resetOpenCodeAuthCache()
 
     const baseURL = 'http://127.0.0.1:44452'
     const authorizationHeaders: string[] = []

@@ -9,7 +9,7 @@ import {
   readModelCacheSavedAt,
   writeModelCache,
 } from '../src/utils/model-cache'
-import { __resetOpenCodeAuthCacheForTests } from '../src/utils/opencode-auth'
+import { resetOpenCodeAuthCache } from '../src/utils/opencode-auth'
 
 interface ProviderConfig {
   npm?: string
@@ -47,7 +47,7 @@ describe('OpenCode 1 config hook', () => {
     // credentials, and stored-key fingerprints must be deterministic.
     homeDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-home-'))
     process.env.HOME = homeDirectory
-    __resetOpenCodeAuthCacheForTests()
+    resetOpenCodeAuthCache()
   })
 
   afterEach(() => {

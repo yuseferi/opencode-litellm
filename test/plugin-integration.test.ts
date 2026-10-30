@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import plugin from '../src'
+import { buildCacheKey, readModelCacheEntry } from '../src/utils/model-cache'
 import type { Context } from '@opencode/plugin/promise/plugin'
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -126,7 +127,7 @@ describe('connect dialog integration', () => {
     vi.restoreAllMocks()
   })
 
-  it('registers the LiteLLM integration with an API key form', async () => {
+  it('registers the LiteLLM integration with an API key form and two sign-in methods', async () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-integration-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory
     globalThis.fetch = vi.fn(async () => new Response('not found', { status: 503 }))
@@ -147,15 +148,31 @@ describe('connect dialog integration', () => {
     const cleanup = await plugin.setup(context)
 
     expect(integration.transform).toHaveBeenCalledOnce()
-    const keyMethod = integration.methodUpdate.mock.calls.map(
-      (call) => call[0] as { integrationID: string; method: { type: string; form?: unknown[] } },
+    const methods = integration.methodUpdate.mock.calls.map(
+      (call) =>
+        call[0] as {
+          integrationID: string
+          method: { type: string; id?: string; form?: Array<{ key: string; type: string }> }
+          authorize?: unknown
+          refresh?: unknown
+        },
     )
-    expect(keyMethod).toHaveLength(1)
-    expect(keyMethod[0].integrationID).toBe('litellm')
-    expect(keyMethod[0].method.type).toBe('key')
-    const form = keyMethod[0].method.form as Array<{ key: string; type: string }>
-    expect(form.map((field) => field.key)).toEqual(['baseURL', 'providerID'])
-    expect(form.every((field) => field.type === 'string')).toBe(true)
+    expect(methods.map((entry) => entry.integrationID)).toEqual(['litellm', 'litellm', 'litellm'])
+    expect(methods.map((entry) => [entry.method.type, entry.method.id])).toEqual([
+      ['key', undefined],
+      ['oauth', 'sso'],
+      ['oauth', 'oidc'],
+    ])
+    expect(methods.map((entry) => entry.method.form?.map((field) => field.key))).toEqual([
+      ['baseURL', 'providerID'],
+      ['baseURL', 'providerID', 'team'],
+      ['baseURL', 'providerID', 'issuer', 'clientId', 'scope', 'redirectPorts'],
+    ])
+    expect(methods.flatMap((entry) => entry.method.form ?? []).every((field) => field.type === 'string')).toBe(true)
+    for (const entry of methods.slice(1)) {
+      expect(entry.authorize).toBeTypeOf('function')
+      expect(entry.refresh).toBeTypeOf('function')
+    }
 
     await cleanup?.()
     expect(integration.registrations[0].dispose).toHaveBeenCalledOnce()
@@ -248,6 +265,44 @@ describe('connect dialog integration', () => {
     expect(registered[0].info.settings).not.toHaveProperty('apiKey')
     expect(registered[0].models.map((model) => model.id)).toEqual(['connected-model'])
     expect(authorizationHeaders).toContain('Bearer connected-key')
+
+    await cleanup?.()
+  })
+
+  it('reads the form answers from credential metadata (OpenCode 2.1+)', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-metadata-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    globalThis.fetch = discoveryFetch([{ id: 'metadata-model' }])
+
+    const integration = makeIntegration()
+    integration.active.mockResolvedValue({ type: 'credential', id: 'cred-1' })
+    integration.resolve.mockResolvedValue({
+      type: 'key',
+      key: 'connected-key',
+      metadata: { baseURL: 'http://127.0.0.1:44509/v1', providerID: 'gateway' },
+    })
+
+    const registered: RegisteredEntry[] = []
+    const context = {
+      app: { name: 'OpenCode', version: '2.1.0', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(makeStatefulEditor(registered, []) as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      integration,
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    expect(registered).toHaveLength(1)
+    expect(registered[0].info).toMatchObject({ id: 'gateway', integrationID: 'litellm' })
+    expect(registered[0].info.settings).toMatchObject({ baseURL: 'http://127.0.0.1:44509/v1' })
 
     await cleanup?.()
   })
@@ -682,7 +737,7 @@ describe('connect dialog integration', () => {
     await cleanup?.()
   })
 
-  it('ignores non-key credentials from the connection', async () => {
+  it('ignores OAuth credentials from methods this plugin does not register', async () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-oauth-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory
 
@@ -692,8 +747,16 @@ describe('connect dialog integration', () => {
     })
 
     const integration = makeIntegration()
-    integration.active.mockResolvedValue({ type: 'oauth', id: 'cred-1' })
-    integration.resolve.mockResolvedValue({ type: 'oauth', access: 'token' })
+    integration.active.mockResolvedValue({ type: 'credential', id: 'cred-1', method: 'oauth', label: '' })
+    // Usable if it counted: it names a proxy, so only the methodID keeps it out.
+    integration.resolve.mockResolvedValue({
+      type: 'oauth',
+      methodID: 'another-plugin',
+      access: 'token',
+      refresh: '',
+      expires: Number.MAX_SAFE_INTEGER,
+      metadata: { baseURL: 'http://127.0.0.1:44512' },
+    })
 
     const registered: Array<{ info: Record<string, unknown> }> = []
     const editor = {
@@ -726,8 +789,136 @@ describe('connect dialog integration', () => {
     const cleanup = await plugin.setup(context)
 
     // Without a key and without any reachable baseURL there is nothing to
-    // register; the oauth credential is never treated as an API key.
+    // register; another method's oauth credential is never treated as an API key.
     expect(registered).toHaveLength(0)
+
+    await cleanup?.()
+  })
+
+  it('uses a LiteLLM sign-in for discovery and keys its cache by the credential', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-sso-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    const authorizationHeaders: string[] = []
+    globalThis.fetch = vi.fn(async (input, init) => {
+      authorizationHeaders.push(new Headers(init?.headers).get('Authorization') ?? '')
+      return discoveryFetch([{ id: 'sso-model' }])(input)
+    })
+
+    const integration = makeIntegration()
+    integration.active.mockResolvedValue({ type: 'credential', id: 'cred-sso', method: 'oauth', label: 'LiteLLM' })
+    integration.resolve.mockResolvedValue({
+      type: 'oauth',
+      methodID: 'sso',
+      access: 'example-access',
+      refresh: 'example-refresh',
+      expires: Date.now() + 3_600_000,
+      metadata: { flow: 'litellm_cli_pkce', baseURL: 'http://127.0.0.1:44510', providerID: 'litellm' },
+    })
+    const registered: RegisteredEntry[] = []
+    const context = {
+      app: { name: 'OpenCode', version: '2.1.0', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(makeStatefulEditor(registered, []) as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      integration,
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    expect(registered).toHaveLength(1)
+    expect(registered[0].info).toMatchObject({ id: 'litellm', integrationID: 'litellm' })
+    expect(registered[0].info.settings).toMatchObject({ baseURL: 'http://127.0.0.1:44510/v1' })
+    expect(registered[0].info.settings).not.toHaveProperty('apiKey')
+    expect(registered[0].models.map((model) => model.id)).toEqual(['sso-model'])
+    expect(authorizationHeaders).toContain('Bearer example-access')
+    // The access token rotates on refresh; the credential id does not.
+    const baseURL = 'http://127.0.0.1:44510'
+    expect(readModelCacheEntry(buildCacheKey('litellm', baseURL, {}, {}, {}, 'cred-sso'))).not.toBeNull()
+    expect(readModelCacheEntry(buildCacheKey('litellm', baseURL, {}, {}, {}, 'example-access'))).toBeNull()
+
+    await cleanup?.()
+  })
+
+  it('signs in to the configured proxy with its headers, and refuses another one', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-sso-authorize-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const ssoRequests: Array<{ url: string; gateway: string | null }> = []
+    globalThis.fetch = vi.fn(async (input, init) => {
+      const url = String(input)
+      if (url.includes('/sso/') || url.includes('/.well-known/') || url.endsWith('/key/generate')) {
+        ssoRequests.push({ url, gateway: new Headers(init?.headers).get('X-Gateway') })
+      }
+      if (url.endsWith('/sso/cli/start')) return new Response('method not allowed', { status: 405 })
+      return new Response('not found', { status: 404 })
+    })
+
+    const integration = makeIntegration()
+    const configuredProvider = {
+      id: 'litellm',
+      name: 'LiteLLM',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      settings: { baseURL: 'https://llm.example.com/v1' },
+      headers: { 'X-Gateway': 'example-gateway' },
+    }
+    const context = {
+      app: { name: 'OpenCode', version: '2.1.0', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [configuredProvider] })),
+        transform: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
+        reload: vi.fn(async () => {}),
+      },
+      integration,
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+    const sso = integration.methodUpdate.mock.calls
+      .map((call) => call[0])
+      .find((entry) => entry.method.id === 'sso') as {
+      authorize: (answer: Record<string, unknown>) => Promise<{
+        mode: string
+        url: string
+        callback: (code: string) => Promise<Record<string, unknown>>
+      }>
+      refresh: (credential: Record<string, unknown>) => Promise<Record<string, unknown>>
+    }
+
+    await expect(sso.authorize({ baseURL: 'https://other.example.com' })).rejects.toThrow(
+      'Provider "litellm" is configured for https://llm.example.com/v1',
+    )
+
+    const authorization = await sso.authorize({})
+    expect(authorization).toMatchObject({ mode: 'code', url: 'https://llm.example.com/sso/key/generate' })
+    const credential = await authorization.callback('example-ui-token')
+    expect(credential).toEqual({
+      type: 'oauth',
+      methodID: 'sso',
+      access: 'example-ui-token',
+      refresh: '',
+      expires: Number.MAX_SAFE_INTEGER,
+      metadata: { baseURL: 'https://llm.example.com', providerID: 'litellm' },
+    })
+    expect(ssoRequests.map((request) => request.url)).toEqual([
+      'https://llm.example.com/.well-known/litellm-cli-auth',
+      'https://llm.example.com/sso/cli/start',
+      'https://llm.example.com/key/generate',
+    ])
+    expect(ssoRequests.every((request) => request.gateway === 'example-gateway')).toBe(true)
+
+    await expect(sso.refresh(credential)).resolves.toEqual(credential)
+    await expect(sso.refresh({ ...credential, expires: Date.now() - 1 })).rejects.toThrow(
+      'LiteLLM sign-in expired; connect LiteLLM again',
+    )
 
     await cleanup?.()
   })
