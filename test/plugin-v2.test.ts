@@ -1618,7 +1618,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     const active = vi
       .fn()
       .mockResolvedValueOnce({ key: 'old-key' })
-      .mockResolvedValueOnce({ key: 'new-key' })
+      .mockResolvedValue({ key: 'new-key' })
     const reload = vi.fn(async () => providerTransform?.(editor))
     const context = {
       app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
@@ -1655,7 +1655,9 @@ describe('OpenCode 2 plugin entrypoint', () => {
     const cleanup = await plugin.setup(context)
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(2))
 
-    expect(active).toHaveBeenCalledTimes(2)
+    // Setup, the switch, and the rediscovery, which resolves the connection
+    // again so a rotating sign-in token is fresh.
+    expect(active).toHaveBeenCalledTimes(3)
     expect(authorizationHeaders).toContain('Bearer new-key')
     // The connection-managed credential is used for discovery but must not
     // be materialized into provider settings — OpenCode injects it itself.
