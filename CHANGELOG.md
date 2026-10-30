@@ -1,3 +1,10 @@
+## [1.8.1](https://github.com/yuseferi/opencode-litellm/compare/v1.8.0...v1.8.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* keep brand casing and dotted versions in model display names ([#50](https://github.com/yuseferi/opencode-litellm/issues/50)) ([5e78977](https://github.com/yuseferi/opencode-litellm/commit/5e7897734c5e0a4cc2812b0d439fc4549abe7049))
+
 # [1.8.0](https://github.com/yuseferi/opencode-litellm/compare/v1.7.1...v1.8.0) (2026-10-26)
 
 
