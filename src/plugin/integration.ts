@@ -110,11 +110,12 @@ export async function readConnectedConfig(
     if (!active) return undefined
     const credential = await connection.resolve(active)
     if (!credential || credential.type !== 'key') return undefined
-    const configuration = credential.configuration as Record<string, unknown> | undefined
+    // OpenCode 2.1 moved the form answers from `configuration` to `metadata`.
+    const answers = (credential.metadata ?? credential.configuration) as Record<string, unknown> | undefined
     return {
       apiKey: credential.key,
-      baseURL: readAnswer(configuration, 'baseURL'),
-      providerID: readAnswer(configuration, 'providerID'),
+      baseURL: readAnswer(answers, 'baseURL'),
+      providerID: readAnswer(answers, 'providerID'),
     }
   } catch {
     return undefined

@@ -252,6 +252,44 @@ describe('connect dialog integration', () => {
     await cleanup?.()
   })
 
+  it('reads the form answers from credential metadata (OpenCode 2.1+)', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-metadata-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    globalThis.fetch = discoveryFetch([{ id: 'metadata-model' }])
+
+    const integration = makeIntegration()
+    integration.active.mockResolvedValue({ type: 'credential', id: 'cred-1' })
+    integration.resolve.mockResolvedValue({
+      type: 'key',
+      key: 'connected-key',
+      metadata: { baseURL: 'http://127.0.0.1:44509/v1', providerID: 'gateway' },
+    })
+
+    const registered: RegisteredEntry[] = []
+    const context = {
+      app: { name: 'OpenCode', version: '2.1.0', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(makeStatefulEditor(registered, []) as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      integration,
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    expect(registered).toHaveLength(1)
+    expect(registered[0].info).toMatchObject({ id: 'gateway', integrationID: 'litellm' })
+    expect(registered[0].info.settings).toMatchObject({ baseURL: 'http://127.0.0.1:44509/v1' })
+
+    await cleanup?.()
+  })
+
   it('prefers explicit configuration over the connected credential', async () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-precedence-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory

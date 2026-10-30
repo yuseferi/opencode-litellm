@@ -90,6 +90,7 @@
 
 ### Bug Fixes
 
+* **v2:** read the connect dialog's Base URL and Provider ID from the credential's `metadata`, where OpenCode 2.1+ stores them
 * prefer a credential saved in the box (the active connection / `/connect` entry) over `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` on both the V1 server path and the OpenCode 2 plugin host; the model cache is now isolated per credential
 * **v2:** register Chat Completions models whose deployment accepts Anthropic `cache_control` with `compatibility.cacheFormat: "anthropic"` so prompt caching works for Claude behind LiteLLM
 * **v2:** spell reasoning-effort variants as `thinking` + `effort` for providers on an Anthropic runtime package, where `reasoningEffort` is ignored; models without adaptive thinking get none there
