@@ -1,11 +1,12 @@
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import type { SsoToken } from './sso'
 
 /**
  * Shape of an `api`-type entry in OpenCode's own credential store. OpenCode
- * also stores `oauth` and `wellknown` entries there, but LiteLLM proxies
- * only ever use a plain API key, so that's the only variant we care about.
+ * also stores `oauth` (a LiteLLM sign-in, see `getOpenCodeStoredSso`) and
+ * `wellknown` entries there.
  */
 interface OpenCodeApiAuthEntry {
   type: 'api'
@@ -33,22 +34,22 @@ function resolveAuthPath(): string {
 // (model discovery itself is cached per baseURL for the same reason).
 let cachedAuthFile: Promise<OpenCodeAuthFile | null> | null = null
 
-async function loadOpenCodeAuthFile(): Promise<OpenCodeAuthFile | null> {
-  if (!cachedAuthFile) {
-    cachedAuthFile = (async () => {
-      try {
-        const raw = await readFile(resolveAuthPath(), 'utf-8')
-        const parsed: unknown = JSON.parse(raw)
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          return parsed as OpenCodeAuthFile
-        }
-      } catch {
-        // File doesn't exist, isn't readable, or isn't valid JSON — treat
-        // as "no stored credentials" rather than failing plugin startup.
-      }
-      return null
-    })()
+async function readOpenCodeAuthFile(): Promise<OpenCodeAuthFile | null> {
+  try {
+    const raw = await readFile(resolveAuthPath(), 'utf-8')
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as OpenCodeAuthFile
+    }
+  } catch {
+    // File doesn't exist, isn't readable, or isn't valid JSON — treat
+    // as "no stored credentials" rather than failing plugin startup.
   }
+  return null
+}
+
+async function loadOpenCodeAuthFile(): Promise<OpenCodeAuthFile | null> {
+  cachedAuthFile ??= readOpenCodeAuthFile()
   return cachedAuthFile
 }
 
@@ -77,7 +78,57 @@ export async function getOpenCodeStoredApiKey(providerId: string): Promise<strin
   return undefined
 }
 
-/** Test-only: force the next read to hit disk again. */
-export function __resetOpenCodeAuthCacheForTests(): void {
+/**
+ * Force the next read to hit disk again. OpenCode 1 rebuilds its plugin
+ * instance after a login, and the new instance must see the new credential.
+ */
+export function resetOpenCodeAuthCache(): void {
   cachedAuthFile = null
+}
+
+/**
+ * An OpenCode 1 OAuth entry for a LiteLLM sign-in. OpenCode 1 keeps only these
+ * fields and drops the rest the next time it rewrites the file, so the
+ * sign-in's metadata travels as JSON in `accountId`.
+ */
+export function toOpenCodeOAuthEntry(token: SsoToken): {
+  type: 'oauth'
+  access: string
+  refresh: string
+  expires: number
+  accountId: string
+} {
+  const { access, refresh, expires, metadata } = token
+  return { type: 'oauth', access, refresh, expires, accountId: JSON.stringify(metadata) }
+}
+
+/**
+ * The LiteLLM sign-in OpenCode 1 stored for `providerId`, read from disk on
+ * every call: the plugin refreshes it in place, and so may another OpenCode
+ * process sharing the file.
+ */
+export async function getOpenCodeStoredSso(providerId: string): Promise<SsoToken | undefined> {
+  const entry = (await readOpenCodeAuthFile())?.[providerId]
+  if (
+    entry?.type !== 'oauth' ||
+    typeof entry.access !== 'string' ||
+    typeof entry.refresh !== 'string' ||
+    typeof entry.expires !== 'number' ||
+    typeof entry.accountId !== 'string'
+  ) {
+    return undefined
+  }
+  try {
+    const metadata: unknown = JSON.parse(entry.accountId)
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined
+    return {
+      access: entry.access,
+      refresh: entry.refresh,
+      expires: entry.expires,
+      metadata: metadata as Record<string, unknown>,
+    }
+  } catch {
+    // Not one of this plugin's sign-ins.
+    return undefined
+  }
 }

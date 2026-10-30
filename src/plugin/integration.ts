@@ -6,7 +6,7 @@ import {
   authorizeOidc,
   parseOidcConfig,
   refreshSsoToken,
-  ssoRoot,
+  signInRoot,
   type SsoAuthorization,
   type SsoToken,
 } from '../utils/sso'
@@ -90,25 +90,15 @@ const signInBaseURLField = {
   placeholder: 'https://llm.example.com',
 } as const
 
-/**
- * Proxy URL, provider id, and gateway headers for a sign-in. Explicit
- * configuration wins in discovery, so a typed URL that differs from it is
- * refused: the token would be sent to a proxy that did not issue it.
- */
+/** Proxy URL, provider id, and gateway headers for a sign-in. */
 async function signInTarget(
   answer: Record<string, unknown>,
   resolveTarget: SignInTargetResolver,
 ): Promise<{ providerID: string; baseURL: string | undefined; headers: Record<string, string> }> {
   const providerID = readAnswer(answer, 'providerID') ?? LITELLM_INTEGRATION_ID
   const target = await resolveTarget(providerID)
-  const typed = readAnswer(answer, 'baseURL')
-  if (typed && target.baseURL && ssoRoot(typed) !== ssoRoot(target.baseURL)) {
-    throw new Error(
-      `Provider "${providerID}" is configured for ${target.baseURL}; leave Base URL empty, or connect under another Provider ID`,
-    )
-  }
-  const baseURL = typed ?? target.baseURL ?? (process.env.LITELLM_BASE_URL?.trim() || undefined)
-  return { providerID, baseURL: baseURL && ssoRoot(baseURL), headers: target.headers }
+  const baseURL = signInRoot(readAnswer(answer, 'baseURL'), target.baseURL, providerID)
+  return { providerID, baseURL, headers: target.headers }
 }
 
 /** Wraps a sign-in for the host, storing the session as an OAuth credential of `methodID`. */

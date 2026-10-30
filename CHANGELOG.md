@@ -91,6 +91,7 @@
 ### Bug Fixes
 
 * **v2:** read the connect dialog's Base URL and Provider ID from the credential's `metadata`, where OpenCode 2.1+ stores them
+* **v1:** after a login rebuilds the plugin (as `/connect` and the Desktop app do), read the new credential instead of a cached `auth.json`, and stop treating values the plugin wrote into a provider's options on an earlier run as configuration, since OpenCode 1 keeps its global config for the whole process
 * prefer a credential saved in the box (the active connection / `/connect` entry) over `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` on both the V1 server path and the OpenCode 2 plugin host; the model cache is now isolated per credential
 * **v2:** register Chat Completions models whose deployment accepts Anthropic `cache_control` with `compatibility.cacheFormat: "anthropic"` so prompt caching works for Claude behind LiteLLM
 * **v2:** spell reasoning-effort variants as `thinking` + `effort` for providers on an Anthropic runtime package, where `reasoningEffort` is ignored; models without adaptive thinking get none there
@@ -100,7 +101,7 @@
 
 ### Features
 
-* **v2:** sign in from the connect-provider dialog with LiteLLM SSO (the CLI-auth PKCE contract, CLI SSO, or a token pasted from the LiteLLM UI) or directly with an OpenID Connect identity provider; OpenCode stores, refreshes, and injects the token, and the model cache of a sign-in is keyed by its credential id
+* sign in with LiteLLM SSO (the CLI-auth PKCE contract, CLI SSO, or a token pasted from the LiteLLM UI) or directly with an OpenID Connect identity provider, from the connect dialog of OpenCode 1 and 2, their Desktop apps, and `opencode auth login`; the token is refreshed and sent with every request, and the model cache of a sign-in survives its token rotating
 * register a LiteLLM integration with OpenCode 2's connect-provider dialog so gateways can be connected entirely from the web UI (API key plus an optional base URL/provider id form), with the stored key used for discovery and injected by OpenCode at request time
 * **v2:** add the `modelCompatibility` option to set or remove the inferred `cacheFormat` per model
 * route models LiteLLM reports with `mode: "responses"` through the OpenAI Responses API (per-model runtime package on OpenCode 2; a `<provider>-responses` sibling on OpenCode 1)

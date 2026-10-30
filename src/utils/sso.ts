@@ -161,6 +161,42 @@ export function ssoRoot(baseURL: string): string {
   return normalizeBaseURL(url.href)
 }
 
+/**
+ * The proxy a sign-in for `providerID` goes to. Explicit configuration wins in discovery, so a typed
+ * URL that differs from it is refused: the token would be sent to a proxy that did not issue it.
+ */
+export function signInRoot(
+  typed: string | undefined,
+  configured: string | undefined,
+  providerID: string,
+): string | undefined {
+  if (typed && configured && ssoRoot(typed) !== ssoRoot(configured)) {
+    throw new Error(
+      `Provider "${providerID}" is configured for ${configured}; leave Base URL empty to sign in there`,
+    )
+  }
+  const baseURL = typed ?? configured ?? (process.env.LITELLM_BASE_URL?.trim() || undefined)
+  return baseURL && ssoRoot(baseURL)
+}
+
+/** Whether two base URLs name the same proxy. */
+export function sameProxy(a: string, b: string): boolean {
+  try {
+    return ssoRoot(a) === ssoRoot(b)
+  } catch {
+    return false
+  }
+}
+
+/** What a sign-in's model cache is keyed by: stable while its tokens rotate, new for a new sign-in. */
+export function ssoIdentity(token: SsoToken): string {
+  const { flow, clientId, issuer, subject } = token.metadata
+  if (flow === PKCE_FLOW) return `${flow} ${String(clientId)}`
+  if (flow === OIDC_FLOW) return `${flow} ${String(issuer)} ${String(subject)}`
+  // CLI SSO and UI tokens are never refreshed.
+  return token.access
+}
+
 function canonicalIssuer(value: string): string {
   const url = new URL(value)
   if (url.username || url.password || url.search || url.hash)
@@ -757,7 +793,8 @@ export async function authorizeLiteLLM(
   return {
     mode: 'auto',
     url: `${root}/sso/key/generate?${new URLSearchParams({ source: 'litellm-cli', key: start.loginId })}`,
-    instructions: `Sign in to LiteLLM in your browser and confirm the code ${start.userCode}.`,
+    // OpenCode 1's connect dialog shows the text after the last colon as the code to confirm.
+    instructions: `Sign in to LiteLLM in your browser and confirm this code: ${start.userCode}`,
     expiresAt: expiresIn(start.expiresInSeconds),
     callback: handled(pollCliSso(root, start, headers, team)),
   }

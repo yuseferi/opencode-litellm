@@ -79,7 +79,7 @@ also shows how to configure a provider directly in `opencode.json`.
 | 🧩 **Reasoning-effort variants** | When LiteLLM reports per-model effort support (`supports_low_reasoning_effort`, …), the plugin surfaces each level as a picker variant automatically. |
 | 🧭 **Responses-API routing** | Models LiteLLM reports with `mode: "responses"` are invoked through `/v1/responses` instead of `/v1/chat/completions`, with no extra configuration. OpenCode 2 overrides the runtime package per model; OpenCode 1 gets a `<provider>-responses` sibling. |
 | 🔐 **Auth-aware** | Honours `providers.litellm.settings.apiKey`, OpenCode `/connect` credentials, the box auth store, and `LITELLM_API_KEY` / `LITELLM_MASTER_KEY` on both the V1 server path and the OpenCode 2 plugin host; on OpenCode 2 a **LiteLLM** entry in the connect-provider dialog (key plus optional base URL) connects a gateway entirely from the web UI. A saved credential beats the environment key. |
-| 🪪 **Single sign-on (OpenCode 2)** | Signs in from the connect-provider dialog through LiteLLM SSO (CLI-auth PKCE, CLI SSO, or a token pasted from the LiteLLM UI) or directly with an OpenID Connect identity provider. OpenCode stores, refreshes, and injects the token. |
+| 🪪 **Single sign-on** | Signs in through LiteLLM SSO (CLI-auth PKCE, CLI SSO, or a token pasted from the LiteLLM UI) or directly with an OpenID Connect identity provider, from the connect dialog of OpenCode 1 and 2, their Desktop apps, or `opencode auth login`. The token is refreshed and sent with every request. |
 | 🌐 **Gateway-friendly** | Supports provider `headers` (and the legacy `customHeaders` option) for proxies behind Cloudflare Access or other API gateways. |
 | 🧩 **Splittable catalog** | `includeModels` / `excludeModels` (glob patterns) let one LiteLLM proxy be divided into several OpenCode providers — e.g. by naming prefix — without hand-maintaining a model list. |
 | 🎚️ **Capability overrides** | `modelCapabilities` forces or retracts per-model capability flags (`supports_vision`, `supports_function_calling`, …) when `/v1/model/info` is unavailable or disagrees with your deployment. |
@@ -328,7 +328,7 @@ If your LiteLLM proxy requires a master key, expose it via any of these approach
 | Method | Example |
 |---|---|
 | Web UI / `/connect` | Run `/connect` (or use the Desktop providers view), pick **LiteLLM**, paste the key, and optionally fill in the base URL and provider id |
-| Single sign-on (OpenCode 2) | `/connect` → **LiteLLM** → **LiteLLM SSO** or **Identity provider (OIDC)**; see [Single sign-on](#single-sign-on-opencode-2) |
+| Single sign-on | `/connect` (or the Desktop providers view) → **LiteLLM** → **LiteLLM SSO** or **Identity provider (OIDC)**; see [Single sign-on](#single-sign-on) |
 | Env var (base URL) | `LITELLM_BASE_URL=https://litellm.internal.example.com/v1` |
 | Env var | `export LITELLM_API_KEY=sk-...` |
 | Env var (alias) | `export LITELLM_MASTER_KEY=sk-...` |
@@ -346,9 +346,9 @@ With no configuration at all, `/connect` → **LiteLLM** is enough:
 
 Precedence when several sources are configured: explicit provider/plugin settings always win. For the key, a credential saved in the box (the active connection or the `/connect` entry) beats the environment (`LITELLM_API_KEY`/`LITELLM_MASTER_KEY`), which is only a fallback; for the base URL, the dialog answer beats `LITELLM_BASE_URL` and local port auto-detection. A provider defined in `opencode.json` (without its own key) picks the saved credential up on the next start, while providers created from the dialog update immediately — reconnecting re-points them in place, including a changed base URL or provider id.
 
-#### Single sign-on (OpenCode 2)
+#### Single sign-on
 
-The **LiteLLM** entry in `/connect` also offers two browser sign-ins. OpenCode stores the session as a credential of the integration, refreshes it, and injects it into requests, as it does with a connected key. The sign-in returns to a temporary `http://127.0.0.1` callback, so the browser must run on the same machine as OpenCode, and the proxy needs an `https` base URL (plain `http` only on a loopback host).
+The **LiteLLM** entry in `/connect` also offers two browser sign-ins. The sign-in returns to a temporary `http://127.0.0.1` callback, so the browser must run on the same machine as the OpenCode server (OpenCode Desktop's own server qualifies; a Desktop connected to a remote server does not), and the proxy needs an `https` base URL (plain `http` only on a loopback host). On OpenCode 2, OpenCode stores the session as a credential of the integration, refreshes it, and injects it into requests, as it does with a connected key; OpenCode 1 differences are [below](#opencode-1).
 
 **LiteLLM SSO** signs in through the proxy. Leave **Base URL** empty to use the configured provider's URL or `LITELLM_BASE_URL`. A URL that differs from the configured one is refused, because explicit configuration wins in discovery and the token would go to a proxy that did not issue it. The plugin uses the newest flow the proxy offers:
 
@@ -358,7 +358,18 @@ The **LiteLLM** entry in `/connect` also offers two browser sign-ins. OpenCode s
 
 **Identity provider (OIDC)** signs in with your identity provider directly, for proxies running LiteLLM JWT auth (`enable_jwt_auth`) that trust its issuer and accept the client ID as an audience. Enter the `https` issuer URL, a public client ID (no secret) registered for authorization code + PKCE with the redirect `http://127.0.0.1:<port>/callback`, the scopes (default `openid`; some identity providers only issue a refresh token with `offline_access`), and, for identity providers that only accept exact redirect URIs, the ports to try. The `id_token` is the bearer token: the plugin checks its issuer, audience, authorized party, subject, expiry, and nonce, and the proxy verifies its signature. Signing in sends nothing to the proxy, and identity provider requests never carry custom headers.
 
-Disconnecting removes the local credential only; it does not revoke the session on the proxy or the identity provider. OpenCode 1 keeps API-key authentication.
+Disconnecting removes the local credential only; it does not revoke the session on the proxy or the identity provider.
+
+If a sign-in fails before the browser opens (no proxy URL, a plain `http` URL, an unreachable proxy or identity provider, an invalid OIDC field), OpenCode shows only a generic error, such as "Unknown error" in the Desktop app: OpenCode drops the message of an error a plugin raises at that step. The reason is in OpenCode's log. Errors after the browser step, such as the team list, are shown.
+
+##### OpenCode 1
+
+OpenCode 1 lists the sign-ins under the `litellm` provider, in `/connect`, its Desktop app's providers view, and `opencode auth login`. The answers that can be left out sit behind a choice instead of an empty field, since the Desktop app cannot submit one: the proxy (**Configured or previous proxy** or **Another URL…**), the team, the scopes, and the redirect ports. Without a configured or previous proxy, pick **Another URL…**.
+
+- **First sign-in:** run `opencode auth login -p litellm`. OpenCode 1 lists a provider in `/connect` and the Desktop app only once it has models, and the proxy hides them until you sign in. After that, reconnect from either; the model list stays cached for the sign-in, so LiteLLM keeps appearing even after the session ends.
+- The session lives in OpenCode 1's `auth.json` like any login (the sign-in's details in `accountId`, the only field OpenCode 1 keeps). The plugin refreshes it shortly before it expires, sends the current token with every request (including the `-responses` sibling), and saves rotated tokens back; when another OpenCode process sharing the file refreshed first, it uses that one.
+- A configured `apiKey` still wins over a sign-in, and a sign-in wins over `LITELLM_API_KEY` / `LITELLM_MASTER_KEY`, even once it expired: requests then ask you to connect again. Without a configured `baseURL`, the plugin uses the proxy the sign-in came from; a `baseURL` configured for another proxy turns the sign-in off (with a warning in the log), so its token never reaches that host.
+- Only the default `litellm` provider id can sign in: OpenCode 1 gives a plugin one auth entry. OpenCode 2 imports OpenCode 1 logins under a method this plugin does not claim, so connect again after upgrading.
 
 The discovered model list is cached per credential: a short hash of the effective key (never the raw key) is part of every cache entry's key, so when the selected credential changes the next discovery starts fresh instead of serving another credential's model list. A sign-in is keyed by its credential id instead, because its access token rotates on every refresh. A `credential.switched` event also recomputes the effective key and reloads the provider registry when it changed — including the first credential saved after setup.
 

@@ -10,7 +10,7 @@ import {
   readModelCacheSavedAt,
   writeModelCache,
 } from '../src/utils/model-cache'
-import { __resetOpenCodeAuthCacheForTests } from '../src/utils/opencode-auth'
+import { resetOpenCodeAuthCache } from '../src/utils/opencode-auth'
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name]
@@ -51,7 +51,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     // credentials, and stored-key fingerprints must be deterministic.
     homeDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-home-'))
     process.env.HOME = homeDirectory
-    __resetOpenCodeAuthCacheForTests()
+    resetOpenCodeAuthCache()
   })
 
   afterEach(() => {
@@ -1760,7 +1760,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
       join(authDirectory, 'auth.json'),
       JSON.stringify({ litellm: { type: 'api', key: 'legacy-stored-key' } }),
     )
-    __resetOpenCodeAuthCacheForTests()
+    resetOpenCodeAuthCache()
 
     const baseURL = 'http://127.0.0.1:44449'
     const authorizationHeaders: string[] = []
@@ -2038,7 +2038,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
       join(authDirectory, 'auth.json'),
       JSON.stringify({ litellm: { type: 'api', key: 'valid-stored-key' } }),
     )
-    __resetOpenCodeAuthCacheForTests()
+    resetOpenCodeAuthCache()
 
     const baseURL = 'http://127.0.0.1:44452'
     const authorizationHeaders: string[] = []

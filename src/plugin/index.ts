@@ -13,7 +13,15 @@ import {
 } from '../utils/format-model-name'
 import { requiresResponsesAPI } from '../utils/transport'
 import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
-import { getOpenCodeStoredApiKey } from '../utils/opencode-auth'
+import { getOpenCodeStoredApiKey, resetOpenCodeAuthCache } from '../utils/opencode-auth'
+import { sameProxy, ssoIdentity } from '../utils/sso'
+import {
+  createSsoSession,
+  liteLLMAuthHook,
+  ssoFetch,
+  type SignInTarget,
+  type SsoSession,
+} from './auth'
 import type { ModelHints } from '../utils/model-cache'
 import {
   buildCacheKey,
@@ -34,6 +42,8 @@ const CHAT_PROVIDER_ID = 'litellm'
 // with it so it never treats its own sibling as a chat provider.
 const RESPONSES_PROVIDER_SUFFIX = '-responses'
 const RESPONSES_NPM = '@ai-sdk/openai'
+// `@ai-sdk/openai` throws without an API key, even when the sign-in's `fetch` sends the real token.
+const SIGN_IN_PLACEHOLDER = 'litellm-sign-in'
 // Covers the 3 s health check plus the parallel models/model-info fetch
 // phase, with headroom. Scales with LITELLM_REQUEST_TIMEOUT_MS so slow
 // proxies aren't cut off by the overall cap either (issue #20).
@@ -98,6 +108,8 @@ const injectedModelIds = new Map<string, Set<string>>()
 interface RefreshContext {
   baseURL: string
   apiKey?: string
+  /** A LiteLLM sign-in, whose rotating access token replaces `apiKey`. */
+  session?: SsoSession
   customHeaders?: Record<string, string>
   filters: ModelFilters
   capabilities: ModelCapabilities
@@ -105,6 +117,23 @@ interface RefreshContext {
   providerId: string
 }
 const refreshContexts = new Map<string, RefreshContext>()
+
+/**
+ * OpenCode 1 caches the global config for the whole process, so after a
+ * login rebuilds the instance a provider's options come back still holding
+ * what this plugin wrote. Only the values the user configured count as
+ * configuration: this snapshot is taken before the plugin first writes.
+ */
+const configuredOptions = new WeakMap<object, Record<string, unknown>>()
+
+function userOptions(options: Record<string, unknown>): Record<string, unknown> {
+  let configured = configuredOptions.get(options)
+  if (!configured) {
+    configured = { ...options }
+    configuredOptions.set(options, configured)
+  }
+  return configured
+}
 
 /** Cache keys with an in-flight background refresh, to avoid pile-ups. */
 const refreshInFlight = new Set<string>()
@@ -535,6 +564,7 @@ function ensureResponsesProvider(
   baseURL: string,
   apiKey: string | undefined,
   customHeaders: Record<string, string> | undefined,
+  runtimeFetch: typeof fetch | undefined,
 ): Record<string, unknown> {
   const id = `${baseProviderId}${RESPONSES_PROVIDER_SUFFIX}`
   if (!config.provider[id] || typeof config.provider[id] !== 'object') {
@@ -553,8 +583,15 @@ function ensureResponsesProvider(
     provider.options = {}
   }
   const options = provider.options as Record<string, unknown>
-  if (!options.baseURL) options.baseURL = `${baseURL}/v1`
-  if (!options.apiKey && apiKey) options.apiKey = apiKey
+  const configured = userOptions(options)
+  if (!configured.baseURL) options.baseURL = `${baseURL}/v1`
+  if (!configured.apiKey) {
+    const key = apiKey ?? (runtimeFetch ? SIGN_IN_PLACEHOLDER : undefined)
+    if (key) options.apiKey = key
+    else delete options.apiKey
+  }
+  if (runtimeFetch) options.fetch = runtimeFetch
+  else if (configured.fetch === undefined) delete options.fetch
   // OpenCode 1 reads provider headers from `options.headers` and hands them to
   // the runtime package (`@ai-sdk/openai` here); it has no `customHeaders` key.
   // Mirror the chat provider's native headers and promote the plugin's
@@ -605,6 +642,7 @@ function injectDiscoveredModels(
   baseURL: string,
   apiKey: string | undefined,
   customHeaders: Record<string, string> | undefined,
+  runtimeFetch?: typeof fetch,
 ): string[] {
   const responsesSet = new Set(responsesIds)
   const existingSibling = config.provider[`${baseProviderId}${RESPONSES_PROVIDER_SUFFIX}`]
@@ -640,6 +678,7 @@ function injectDiscoveredModels(
       baseURL,
       apiKey,
       customHeaders,
+      runtimeFetch,
     )
     added.push(...mergeModels(siblingModels, responsesEntries))
   }
@@ -664,10 +703,11 @@ async function backgroundRefresh(cacheKey: string): Promise<void> {
   }
   refreshInFlight.add(cacheKey)
   try {
+    const apiKey = ctx.session ? await ctx.session.access(ctx.customHeaders) : ctx.apiKey
     const discovered = await withTimeout(
       discoverModels(
         ctx.baseURL,
-        ctx.apiKey,
+        apiKey,
         ctx.customHeaders,
         ctx.providerId,
         ctx.filters,
@@ -716,7 +756,13 @@ async function backgroundRefresh(cacheKey: string): Promise<void> {
  */
 export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
   initLogging(input.client)
+  // OpenCode rebuilds the plugin after a login; this instance must read the new credential.
+  resetOpenCodeAuthCache()
+  const warn = (message: string) => log('warn', message)
+  const session = createSsoSession(input.client, CHAT_PROVIDER_ID, warn)
+  let signInTarget: SignInTarget = { baseURL: undefined, previousURL: undefined, headers: {} }
   return {
+    auth: liteLLMAuthHook(CHAT_PROVIDER_ID, () => signInTarget),
     config: async (config: any) => {
       // Ensure the provider entry exists
       if (!config.provider) config.provider = {}
@@ -756,7 +802,9 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
 
       // Process each matched provider
       for (const { id: providerId, provider } of liteLLMProviders) {
-        const options = (provider.options ?? {}) as Record<string, unknown>
+        // Snapshot the object this plugin writes into, so a later run recognizes those writes.
+        if (!provider.options || typeof provider.options !== 'object') provider.options = {}
+        const options = userOptions(provider.options as Record<string, unknown>)
         const configuredBase =
           typeof options.baseURL === 'string' ? options.baseURL : undefined
         const configuredKey =
@@ -779,11 +827,46 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         override of a user's saved key.
         */
         const storedKey = await getOpenCodeStoredApiKey(providerId)
-        const apiKey = configuredKey ?? storedKey ?? envKey
         // Native `options.headers` and the legacy `customHeaders` both reach
         // discovery and the runtime, so a gateway that only sets one still
         // authenticates the plugin's own fetches.
         const customHeaders = readProviderHeaders(options)
+        // A LiteLLM sign-in for the provider the auth hook serves is a stored
+        // credential too: it beats the environment, and a configured key beats it.
+        let sso =
+          providerId === CHAT_PROVIDER_ID && !configuredKey ? await session.stored() : undefined
+        const signedInTo = sso?.metadata.baseURL
+        if (configuredBase && typeof signedInTo === 'string' && !sameProxy(configuredBase, signedInTo)) {
+          // The provider points elsewhere, and that host must not receive this sign-in's token.
+          log(
+            'warn',
+            `[opencode-litellm] Not using the LiteLLM sign-in for ${signedInTo}: provider "${providerId}" is configured for ${configuredBase}.`,
+          )
+          sso = undefined
+        }
+        if (providerId === CHAT_PROVIDER_ID) {
+          const previousURL = sso?.metadata.baseURL
+          signInTarget = {
+            baseURL: configuredBase,
+            previousURL: typeof previousURL === 'string' ? previousURL : undefined,
+            headers: customHeaders ?? {},
+          }
+        }
+        const ssoKey = sso
+          ? await session.access(customHeaders).catch((error: unknown) => {
+              const message = error instanceof Error ? error.message : String(error)
+              log('warn', `[opencode-litellm] LiteLLM sign-in unusable: ${message}`)
+              return undefined
+            })
+          : undefined
+        // An unusable sign-in still outranks the environment: discovery goes without
+        // a key (an empty one also stops the discovery helpers' own environment
+        // fallback), and requests ask to connect again.
+        const apiKey = configuredKey ?? storedKey ?? (sso ? (ssoKey ?? '') : envKey)
+        // A sign-in's token rotates, so it goes out per request instead of
+        // sitting in `apiKey`.
+        const runtimeKey = sso ? undefined : apiKey
+        const runtimeFetch = sso ? ssoFetch(session, customHeaders) : undefined
         const filters = readModelFilters(options)
         const capabilities = parseModelCapabilities(options.modelCapabilities)
         const formatModelNames = readFormatModelNames(options)
@@ -792,8 +875,12 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         let baseURL: string | null = null
         if (configuredBase) {
           baseURL = normalizeBaseURL(configuredBase)
+        } else if (typeof sso?.metadata.baseURL === 'string') {
+          // The proxy the sign-in was issued by.
+          baseURL = normalizeBaseURL(sso.metadata.baseURL)
         } else {
-          baseURL = await autoDetectLiteLLM(apiKey, customHeaders)
+          // Local port probes never carry a sign-in's token.
+          baseURL = await autoDetectLiteLLM(sso ? undefined : apiKey, customHeaders)
         }
 
         if (!baseURL) {
@@ -818,7 +905,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
           actualProvider.options = {}
         }
         const actualOptions = actualProvider.options as Record<string, unknown>
-        if (!actualOptions.baseURL) {
+        if (!configuredBase) {
           actualOptions.baseURL = `${baseURL}/v1`
         }
         /*
@@ -832,9 +919,13 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         go out with no Authorization header even though discovery
         succeeded using the same resolved key.
         */
-        if (!actualOptions.apiKey && apiKey) {
-          actualOptions.apiKey = apiKey
+        // Recomputed every run, so an earlier credential never lingers (see userOptions).
+        if (!configuredKey) {
+          if (runtimeKey) actualOptions.apiKey = runtimeKey
+          else delete actualOptions.apiKey
         }
+        if (runtimeFetch) actualOptions.fetch = runtimeFetch
+        else if (options.fetch === undefined) delete actualOptions.fetch
 
         if (!actualProvider.models) {
           actualProvider.models = {}
@@ -847,16 +938,23 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         // fresh discovery instead of serving the old adjusted view.
         // The cache key is isolated by the effective credential (a fingerprint,
         // never the raw key): a credential change starts a fresh discovery
-        // instead of serving another credential's cached model list.
+        // instead of serving another credential's cached model list. A sign-in
+        // keeps one key while its token rotates, and even once it expired, so
+        // the provider keeps its models and can be reconnected from `/connect`.
         const cacheKey = buildCacheKey(providerId, baseURL, filters, capabilities, {
           formatModelNames,
-        }, apiKey)
+        }, sso ? ssoIdentity(sso) : apiKey)
 
         // Remember how to reach this proxy so the `event` hook can
         // revalidate its cache in the background on new sessions.
+        // Only this run's context refreshes in the background: an earlier one may hold another proxy.
+        for (const [key, context] of refreshContexts) {
+          if (context.providerId === providerId && key !== cacheKey) refreshContexts.delete(key)
+        }
         refreshContexts.set(cacheKey, {
           baseURL,
           apiKey,
+          session: sso ? session : undefined,
           customHeaders,
           filters,
           capabilities,
@@ -904,8 +1002,9 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
             cached.models,
             cached.responsesIds,
             baseURL,
-            apiKey,
+            runtimeKey,
             customHeaders,
+            runtimeFetch,
           )
           injectedModelIds.set(cacheKey, new Set(added))
           log(
@@ -939,8 +1038,9 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
             discovered.models,
             discovered.responsesIds,
             baseURL,
-            apiKey,
+            runtimeKey,
             customHeaders,
+            runtimeFetch,
           )
           injectedModelIds.set(cacheKey, new Set(added))
           writeModelCache(cacheKey, discovered.models, discovered.responsesIds, discovered.hints)
