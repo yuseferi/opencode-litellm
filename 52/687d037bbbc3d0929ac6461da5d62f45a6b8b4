@@ -1,0 +1,47 @@
+README.md
+  s_69b316747c10bd::t_391804f2329cd4 505
+src/plugin/v2.ts
+  s_69b316747c10bd::t_f352918100c796 375-378
+test/plugin-v2.test.ts
+  s_69b316747c10bd::t_5ff92a4e870a0c 999-1058,1062-1065
+  s_69b316747c10bd::t_f81f98cbe561de 933,959
+  s_69b316747c10bd::t_f1b38f30310b6c 1059
+  s_69b316747c10bd::t_012520e606d08f 1060-1061
+  s_69b316747c10bd::t_7d2a8fb74a63de 978-982
+src/utils/format-model-name.ts
+  s_69b316747c10bd::t_89f212ae7cafe9 143
+src/plugin/index.ts
+  s_69b316747c10bd::t_486db47995bb89 725-727,731-733
+  s_69b316747c10bd::t_e67464944e628f 724,729-730
+  s_69b316747c10bd::t_e231f923e8fa0b 737
+  s_69b316747c10bd::t_3d5db793ed3437 1063
+  s_69b316747c10bd::t_965bb0ff30a302 582-585,589
+  s_69b316747c10bd::t_aaa2bf306ac32e 900
+  s_69b316747c10bd::t_3c6c953d8e9d1c 270-276
+  s_69b316747c10bd::t_16910022c25d6b 681-685,689-690,694-696
+  s_69b316747c10bd::t_19515983ca8c94 300
+  s_69b316747c10bd::t_8d781a1b1a4ca6 1027
+  s_69b316747c10bd::t_41c07f5b70c440 633-660,677,680,700,707,715,728,734-736,738-743
+  s_69b316747c10bd::t_0164838ba4d74b 686-688,691
+  s_69b316747c10bd::t_1978cd2f9272b3 269
+  s_69b316747c10bd::t_bef098e39eeb02 632
+test/plugin-v1.test.ts
+  s_69b316747c10bd::t_1c8376057d221c 195-233
+  s_69b316747c10bd::t_d70b741b82d908 234-265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "52687d037bbbc3d0929ac6461da5d62f45a6b8b4",
+  "prompts": {},
+  "sessions": {
+    "s_69b316747c10bd": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e69125a45ffebA94Wq57pt1bCb",
+        "model": "unknown"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
