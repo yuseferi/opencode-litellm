@@ -180,6 +180,37 @@ describe('LiteLLM CLI-auth (PKCE) sign-in', () => {
     await expect(authorizeLiteLLM(ROOT)).rejects.toThrow('cross-origin token endpoint')
   })
 
+  it('falls back to CLI SSO when the proxy serves no contract it speaks', async () => {
+    const answers = [
+      () => new Response('forbidden', { status: 403 }),
+      () =>
+        new Response('<!doctype html><title>LiteLLM</title>', {
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      () => cliAuthDiscovery({ contract_version: 2 }),
+    ]
+    for (const discovery of answers) {
+      mockFetch({
+        [`GET ${ROOT}/.well-known/litellm-cli-auth`]: discovery,
+        [`POST ${ROOT}/sso/cli/start`]: () =>
+          json({ login_id: 'example-login', poll_secret: 'example-poll', user_code: 'ABCD-1234' }),
+      })
+      const authorization = await authorizeLiteLLM(ROOT)
+      expect(authorization.instructions).toContain('ABCD-1234')
+    }
+  })
+
+  it('fails on a discovery blip instead of falling back to an older flow', async () => {
+    const calls = mockFetch({
+      [`GET ${ROOT}/.well-known/litellm-cli-auth`]: () =>
+        new Response('unavailable', { status: 503 }),
+    })
+    await expect(authorizeLiteLLM(ROOT)).rejects.toThrow(
+      'LiteLLM CLI auth discovery failed (HTTP 503)',
+    )
+    expect(calls.map((call) => call.key)).toEqual([`GET ${ROOT}/.well-known/litellm-cli-auth`])
+  })
+
   it('rotates tokens on refresh and keeps the refresh token the server does not replace', async () => {
     const calls = mockFetch({
       [`POST ${ROOT}/cli/token`]: () =>
@@ -211,6 +242,28 @@ describe('LiteLLM CLI-auth (PKCE) sign-in', () => {
     await expect(refreshSsoToken(pkceToken())).rejects.toThrow(
       'LiteLLM token exchange rejected (invalid_grant); connect LiteLLM again',
     )
+  })
+
+  it('refuses malformed credential metadata without sending the refresh token', async () => {
+    const calls = mockFetch({})
+    const { clientId: _, ...withoutClient } = pkceToken().metadata
+    await expect(refreshSsoToken(pkceToken({ metadata: withoutClient }))).rejects.toThrow(
+      'Invalid LiteLLM PKCE credential; connect LiteLLM again',
+    )
+    const elsewhere = { ...pkceToken().metadata, tokenEndpoint: 'https://elsewhere.example.net/token' }
+    await expect(refreshSsoToken(pkceToken({ metadata: elsewhere }))).rejects.toThrow(
+      'cross-origin token endpoint',
+    )
+    const oidcWithoutClient = {
+      flow: 'oidc_pkce',
+      issuer: ISSUER,
+      tokenEndpoint: `${ISSUER}/token`,
+      subject: 'example-user',
+    }
+    await expect(refreshSsoToken(pkceToken({ metadata: oidcWithoutClient }))).rejects.toThrow(
+      'Invalid LiteLLM OIDC credential; connect LiteLLM again',
+    )
+    expect(calls).toEqual([])
   })
 })
 
@@ -313,18 +366,41 @@ describe('LiteLLM UI token sign-in', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const exp = Math.floor(Date.now() / 1000) + 600
     const pasted = jwt({ exp })
-    mockFetch({
-      [`POST ${ROOT}/key/generate`]: () => json({ error: 'no database' }, 500),
-    })
+    // No key-generation rights, no route, no database.
+    for (const status of [403, 404, 500]) {
+      mockFetch({
+        [`POST ${ROOT}/key/generate`]: () => json({ error: 'cannot mint a key' }, status),
+      })
+      const authorization = await authorizeLiteLLM(ROOT)
+      if (authorization.mode !== 'code') throw new Error('expected a code sign-in')
+      await expect(authorization.callback(pasted)).resolves.toMatchObject({
+        access: pasted,
+        expires: exp * 1000,
+      })
+      await expect(authorization.callback('  ')).rejects.toThrow(
+        'Paste the token from the LiteLLM UI',
+      )
+    }
+  })
+
+  it('does not save a pasted token LiteLLM rejects', async () => {
+    mockFetch({ [`POST ${ROOT}/key/generate`]: () => json({ error: 'expired' }, 401) })
     const authorization = await authorizeLiteLLM(ROOT)
     if (authorization.mode !== 'code') throw new Error('expected a code sign-in')
-    await expect(authorization.callback(pasted)).resolves.toMatchObject({
-      access: pasted,
-      expires: exp * 1000,
-    })
-    await expect(authorization.callback('  ')).rejects.toThrow(
-      'Paste the token from the LiteLLM UI',
+    await expect(authorization.callback('example-expired-token')).rejects.toThrow(
+      'LiteLLM rejected the pasted token; sign in again and paste a current one',
     )
+  })
+
+  it('offers the UI token when an access gateway refuses CLI SSO, but not after a blip', async () => {
+    let status = 403
+    mockFetch({ [`POST ${ROOT}/sso/cli/start`]: () => new Response('denied', { status }) })
+    await expect(authorizeLiteLLM(ROOT)).resolves.toMatchObject({
+      mode: 'code',
+      url: `${ROOT}/sso/key/generate`,
+    })
+    status = 503
+    await expect(authorizeLiteLLM(ROOT)).rejects.toThrow('LiteLLM CLI SSO start failed (HTTP 503)')
   })
 
   it('lasts until expiry, then asks for a new sign-in', async () => {
@@ -376,9 +452,11 @@ describe('direct OIDC sign-in', () => {
     expect(() =>
       parseOidcConfig({ issuer: ISSUER, clientId: 'example-client', scope: 'profile' }),
     ).toThrow('Invalid OIDC scopes')
-    expect(() =>
-      parseOidcConfig({ issuer: ISSUER, clientId: 'example-client', redirectPorts: '80000' }),
-    ).toThrow('Invalid OIDC redirect ports')
+    for (const redirectPorts of ['80000', '0x10', '1e3']) {
+      expect(() =>
+        parseOidcConfig({ issuer: ISSUER, clientId: 'example-client', redirectPorts }),
+      ).toThrow('Invalid OIDC redirect ports')
+    }
   })
 
   it('signs in with the identity provider and stores its id_token', async () => {
@@ -433,9 +511,11 @@ describe('direct OIDC sign-in', () => {
     await expect(autoCallback(replayed)).rejects.toThrow('OIDC id_token has invalid nonce')
   })
 
-  it('refreshes the id_token for the same subject only', async () => {
+  it('refreshes the id_token for the same subject only, asking for the same scope', async () => {
     let subject = 'example-user'
-    mockFetch({ [`POST ${ISSUER}/token`]: () => json({ id_token: jwt(claims({ sub: subject })) }) })
+    const calls = mockFetch({
+      [`POST ${ISSUER}/token`]: () => json({ id_token: jwt(claims({ sub: subject })) }),
+    })
     const token: SsoToken = {
       access: 'example-old-id-token',
       refresh: 'example-refresh',
@@ -446,11 +526,18 @@ describe('direct OIDC sign-in', () => {
         clientId: 'example-client',
         tokenEndpoint: `${ISSUER}/token`,
         subject: 'example-user',
+        scope: 'openid offline_access',
       },
     }
     await expect(refreshSsoToken(token)).resolves.toMatchObject({
       access: jwt(claims({ sub: 'example-user' })),
       refresh: 'example-refresh',
+    })
+    expect(Object.fromEntries(new URLSearchParams(calls[0].body))).toEqual({
+      grant_type: 'refresh_token',
+      refresh_token: 'example-refresh',
+      client_id: 'example-client',
+      scope: 'openid offline_access',
     })
     subject = 'someone-else'
     await expect(refreshSsoToken(token)).rejects.toThrow(

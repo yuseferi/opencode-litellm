@@ -879,8 +879,9 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
           // The proxy the sign-in was issued by.
           baseURL = normalizeBaseURL(sso.metadata.baseURL)
         } else {
-          // Local port probes never carry a sign-in's token.
-          baseURL = await autoDetectLiteLLM(sso ? undefined : apiKey, customHeaders)
+          // A sign-in only goes to a proxy named for it: probing local ports
+          // would hand its token to whatever answers there.
+          baseURL = await autoDetectLiteLLM(apiKey, customHeaders, sso ? [] : undefined)
         }
 
         if (!baseURL) {

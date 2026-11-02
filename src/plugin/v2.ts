@@ -28,6 +28,7 @@ import {
 } from '../utils/model-cache'
 import { normalizeBaseURL, autoDetectLiteLLM } from '../utils/litellm-api'
 import { getOpenCodeStoredApiKey } from '../utils/opencode-auth'
+import { sameProxy } from '../utils/sso'
 import { parseModelCapabilities } from '../utils/model-capabilities'
 import type { ModelCapabilities } from '../utils/model-capabilities'
 import {
@@ -346,6 +347,18 @@ async function signInTarget(
   }
 }
 
+/**
+ * Whether a sign-in may go to `baseURL`. Its token only goes to the proxy that issued it, as on
+ * OpenCode 1; a sign-in that names no proxy (OIDC) goes where the provider points.
+ */
+function signInReaches(signedInTo: string | undefined, baseURL: string | undefined): boolean {
+  if (!signedInTo || !baseURL || sameProxy(signedInTo, baseURL)) return true
+  logInfo(
+    `[opencode-litellm] Not using the LiteLLM sign-in for ${signedInTo}: ${baseURL} must not receive its token.`,
+  )
+  return false
+}
+
 async function makeProviderSource(
   context: Context,
   provider: ProviderInfo | undefined,
@@ -354,20 +367,24 @@ async function makeProviderSource(
   const providerSettings = asRecord(provider?.settings)
   const settings = { ...pluginOptions, ...providerSettings }
   const customHeaders = providerHeaders(pluginOptions, settings, provider)
+  const configuredBaseURL = readString(settings.baseURL)
   // Credential plus dialog form answers. A provider wired to its own
   // integration keeps using exactly that one; otherwise the plugin's
   // registered integration is consulted, so a gateway can be connected
   // entirely from the web UI with no hand-written config.
-  const connected: ConnectedLiteLLM | undefined = await readConnectedConfig(
+  let connected: ConnectedLiteLLM | undefined = await readConnectedConfig(
     context,
     provider?.integrationID ?? LITELLM_INTEGRATION_ID,
   )
+  // A base URL configured for another proxy turns the sign-in off.
+  if (connected?.credentialID && !signInReaches(connected.baseURL, configuredBaseURL)) {
+    connected = undefined
+  }
   const id =
     provider?.id ??
     readString(pluginOptions.providerID) ??
     connected?.providerID ??
     CHAT_PROVIDER_ID
-  const configuredBaseURL = readString(settings.baseURL)
   const connectedApiKey = connected?.apiKey
   // Precedence rule: an explicit settings/plugin-options apiKey is the
   // operator's deliberate config and stays first; then a credential the user
@@ -398,7 +415,13 @@ async function makeProviderSource(
     ? normalizeBaseURL(configuredBaseURL)
     : connected?.baseURL
       ? normalizeBaseURL(connected.baseURL)
-      : await autoDetectLiteLLM(apiKey, customHeaders)
+      : await autoDetectLiteLLM(
+          apiKey,
+          customHeaders,
+          // A sign-in only goes to a proxy named for it: probing local ports
+          // would hand its token to whatever answers there.
+          usesConnectionCredential && connected?.credentialID ? [] : undefined,
+        )
 
   if (!detectedBaseURL) {
     return null
@@ -510,7 +533,12 @@ async function refreshProviderSource(
       // expiring one, so discovery does not run with a token that has expired.
       if (source.usesConnectionCredential && source.integrationID) {
         const connected = await readConnectedConfig(context, source.integrationID)
-        if (connected?.apiKey) source.apiKey = connected.apiKey
+        if (
+          connected?.apiKey &&
+          (!connected.credentialID || signInReaches(connected.baseURL, source.baseURL))
+        ) {
+          source.apiKey = connected.apiKey
+        }
       }
       const apiKey = source.apiKey
       const discovered = await withTimeout(
@@ -584,7 +612,15 @@ async function refreshConnectionCredential(
     const credential = connection
       ? await context.integration.connection.resolve(connection)
       : undefined
-    const connectionKey = connectionApiKey(credential)
+    let connectionKey = connectionApiKey(credential)
+    // A new sign-in may be for another proxy than the one this source points to.
+    if (
+      connectionKey !== undefined &&
+      credential?.type === 'oauth' &&
+      !signInReaches(readString(credential.metadata?.baseURL), source.baseURL)
+    ) {
+      connectionKey = undefined
+    }
     const settingsApiKey = readString(source.settings.apiKey)
     let nextKey: string | undefined
     let nextUsesConnection: boolean

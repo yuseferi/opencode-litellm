@@ -71,33 +71,43 @@ export function connectionApiKey(credential: Credential.Value | undefined): stri
   return undefined
 }
 
-const providerIDField = {
-  key: 'providerID',
-  type: 'string',
-  title: 'Provider ID',
-  description:
-    'Provider the discovered models appear under. Pick a different id when your config already defines a "litellm" provider, so the connected gateway gets its own entry. Reconnecting with a different id moves the gateway there.',
-  default: LITELLM_INTEGRATION_ID,
-} as const
+// Fields are built per form: the host may decorate the fields of each method it registers.
+const providerIDField = () =>
+  ({
+    key: 'providerID',
+    type: 'string',
+    title: 'Provider ID',
+    description:
+      'Provider the discovered models appear under. Pick a different id when your config already defines a "litellm" provider, so the connected gateway gets its own entry. Reconnecting with a different id moves the gateway there.',
+    default: LITELLM_INTEGRATION_ID,
+  }) as const
 
-const signInBaseURLField = {
-  key: 'baseURL',
-  type: 'string',
-  format: 'uri',
-  title: 'Base URL',
-  description:
-    "The LiteLLM proxy to sign in to. Leave empty to use the configured provider's URL or LITELLM_BASE_URL.",
-  placeholder: 'https://llm.example.com',
-} as const
+const signInBaseURLField = () =>
+  ({
+    key: 'baseURL',
+    type: 'string',
+    format: 'uri',
+    title: 'Base URL',
+    description:
+      "The LiteLLM proxy to sign in to. Leave empty to use the configured provider's URL, the current sign-in's proxy, or LITELLM_BASE_URL.",
+    placeholder: 'https://llm.example.com',
+  }) as const
 
 /** Proxy URL, provider id, and gateway headers for a sign-in. */
 async function signInTarget(
+  context: Context,
   answer: Record<string, unknown>,
   resolveTarget: SignInTargetResolver,
 ): Promise<{ providerID: string; baseURL: string | undefined; headers: Record<string, string> }> {
   const providerID = readAnswer(answer, 'providerID') ?? LITELLM_INTEGRATION_ID
   const target = await resolveTarget(providerID)
-  const baseURL = signInRoot(readAnswer(answer, 'baseURL'), target.baseURL, providerID)
+  const typed = readAnswer(answer, 'baseURL')
+  // Nothing typed or configured: the current sign-in's proxy, as on OpenCode 1, even before a
+  // provider is published for it. Unlike configuration, it is only a default.
+  const current =
+    typed || target.baseURL ? undefined : await readConnectedConfig(context, LITELLM_INTEGRATION_ID)
+  const previous = current?.credentialID ? current.baseURL : undefined
+  const baseURL = signInRoot(typed ?? previous, target.baseURL, providerID)
   return { providerID, baseURL, headers: target.headers }
 }
 
@@ -175,7 +185,7 @@ export async function registerLiteLLMIntegration(
                 'Where the LiteLLM proxy runs, including the /v1 suffix. Leave empty to use LITELLM_BASE_URL or auto-detect a local proxy.',
               placeholder: 'https://llm.example.com/v1',
             },
-            providerIDField,
+            providerIDField(),
           ],
         },
       })
@@ -186,8 +196,8 @@ export async function registerLiteLLMIntegration(
           type: 'oauth',
           label: 'LiteLLM SSO',
           form: [
-            signInBaseURLField,
-            providerIDField,
+            signInBaseURLField(),
+            providerIDField(),
             {
               key: 'team',
               type: 'string',
@@ -198,7 +208,11 @@ export async function registerLiteLLMIntegration(
           ],
         },
         authorize: async (answer) => {
-          const { providerID, baseURL, headers } = await signInTarget(answer, resolveTarget)
+          const { providerID, baseURL, headers } = await signInTarget(
+            context,
+            answer,
+            resolveTarget,
+          )
           if (!baseURL)
             throw new Error('Enter the LiteLLM proxy URL as Base URL, or set LITELLM_BASE_URL')
           const authorization = await authorizeLiteLLM(baseURL, headers, readAnswer(answer, 'team'))
@@ -213,8 +227,8 @@ export async function registerLiteLLMIntegration(
           type: 'oauth',
           label: 'Identity provider (OIDC)',
           form: [
-            signInBaseURLField,
-            providerIDField,
+            signInBaseURLField(),
+            providerIDField(),
             {
               key: 'issuer',
               type: 'string',
@@ -253,7 +267,7 @@ export async function registerLiteLLMIntegration(
         },
         authorize: async (answer) => {
           // Nothing is sent to the proxy, so its URL is only recorded for discovery.
-          const { providerID, baseURL } = await signInTarget(answer, resolveTarget)
+          const { providerID, baseURL } = await signInTarget(context, answer, resolveTarget)
           const config = parseOidcConfig({
             issuer: readAnswer(answer, 'issuer'),
             clientId: readAnswer(answer, 'clientId'),
@@ -300,10 +314,11 @@ export async function readConnectedConfig(
     const apiKey = connectionApiKey(credential)
     if (!credential || apiKey === undefined) return undefined
     // OpenCode 2.1 moved the form answers from `configuration` to `metadata`,
-    // where sign-ins store theirs too.
-    const answers = (credential.metadata ??
-      (credential.type === 'key' ? credential.configuration : undefined)) as
-      Record<string, unknown> | undefined
+    // where sign-ins store theirs too; metadata wins where both hold one.
+    const answers: Record<string, unknown> = {
+      ...(credential.type === 'key' ? credential.configuration : undefined),
+      ...credential.metadata,
+    }
     return {
       apiKey,
       baseURL: readAnswer(answers, 'baseURL'),

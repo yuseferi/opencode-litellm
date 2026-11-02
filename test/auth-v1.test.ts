@@ -1,4 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { PluginInput } from '@opencode-ai/plugin'
@@ -34,6 +36,13 @@ interface ProviderConfig {
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name]
   else process.env[name] = value
+}
+
+/** Listens on a port the OS picks, on the loopback address the sign-in listener uses. */
+async function listenOnFreePort(): Promise<{ server: Server; port: string }> {
+  const server = createServer()
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return { server, port: String((server.address() as AddressInfo).port) }
 }
 
 describe('OpenCode 1 LiteLLM sign-in', () => {
@@ -345,16 +354,24 @@ describe('OpenCode 1 LiteLLM sign-in', () => {
     await expect(signIn({ scope: 'openid offline_access', ports: 'any' })).resolves.toMatchObject({
       scope: 'openid offline_access',
     })
-    const custom = await signIn({
-      scope: 'other',
-      customScope: 'openid profile',
-      ports: 'specific',
-      redirectPorts: '45871',
-    })
-    expect(custom).toEqual({ scope: 'openid profile', port: '45871' })
-    // Ports typed earlier do not count once the user picks any free port.
-    const any = await signIn({ scope: 'openid', ports: 'any', redirectPorts: '45871' })
-    expect(any.port).not.toBe('45871')
+    const busy = await listenOnFreePort()
+    const free = await listenOnFreePort()
+    await new Promise((resolve) => free.server.close(resolve))
+    try {
+      // A busy port falls through to the next one.
+      const custom = await signIn({
+        scope: 'other',
+        customScope: 'openid profile',
+        ports: 'specific',
+        redirectPorts: `${busy.port}, ${free.port}`,
+      })
+      expect(custom).toEqual({ scope: 'openid profile', port: free.port })
+      // Ports typed earlier do not count once the user picks any free port.
+      const any = await signIn({ scope: 'openid', ports: 'any', redirectPorts: busy.port })
+      expect(any.port).not.toBe(busy.port)
+    } finally {
+      busy.server.close()
+    }
   })
 
   it('discovers from the stored sign-in when no baseURL is configured', async () => {
@@ -740,7 +757,7 @@ describe('OpenCode 1 LiteLLM sign-in', () => {
     expect(requests[0].authorization).toBe('Bearer example-access-2')
   })
 
-  it('never sends a sign-in to the local ports it probes for a proxy', async () => {
+  it('does not probe local ports for a sign-in that names no proxy', async () => {
     writeAuthFile({
       type: 'oauth',
       access: 'example-oidc-token',
@@ -753,26 +770,33 @@ describe('OpenCode 1 LiteLLM sign-in', () => {
         subject: 'example-user',
       }),
     })
-    mockFetch((request) =>
-      request.url.startsWith('http://localhost:') &&
-      request.authorization !== 'Bearer example-oidc-token'
-        ? new Response('unauthorized', { status: 401 })
-        : undefined,
-    )
-    const hooks = await LiteLLMPlugin(createInput().input)
-    await hooks.config!(createConfig({}) as never)
+    // Every port answers, even without a key, and discovery would send the token to the first.
+    mockFetch()
+    const { input } = createInput()
+    const config = createConfig({})
+    await (
+      await LiteLLMPlugin(input)
+    ).config!(config as never)
 
-    expect(requests.some((request) => request.url.startsWith('http://localhost:'))).toBe(true)
-    expect(requests.every((request) => request.authorization !== 'Bearer example-oidc-token')).toBe(
-      true,
-    )
+    expect(requests).toEqual([])
+    expect(config.provider.litellm.options.baseURL).toBeUndefined()
+
+    process.env.LITELLM_BASE_URL = `${BASE}/v1`
+    await (
+      await LiteLLMPlugin(input)
+    ).config!(config as never)
+    expect(discoveryRequests().length).toBeGreaterThan(0)
+    for (const request of discoveryRequests()) {
+      expect(request.url).toBe(`${BASE}/v1/models`)
+      expect(request.authorization).toBe('Bearer example-oidc-token')
+    }
   })
 
   it('refreshes the model list in the background only for the current sign-in', async () => {
     const other = 'http://127.0.0.1:44522'
     writeAuthFile(pkceEntry())
     mockFetch()
-    const { input } = createInput()
+    const { client, input } = createInput()
     const config = createConfig({})
     await (
       await LiteLLMPlugin(input)
@@ -790,10 +814,15 @@ describe('OpenCode 1 LiteLLM sign-in', () => {
     vi.spyOn(Date, 'now').mockReturnValue(now + 6 * 60 * 1000)
     requests = []
     await hooks.event!({ event: { type: 'session.created' } } as never)
+    // Refreshes start together, so once the current one is done a stale one would have asked too.
     await vi.waitFor(() =>
-      expect(requests.some((request) => request.url.startsWith(other))).toBe(true),
+      expect(client.app.log).toHaveBeenCalledWith({
+        body: expect.objectContaining({
+          message: expect.stringContaining(`Background-refreshed model cache for ${other}`),
+        }),
+      }),
     )
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(requests.some((request) => request.url.startsWith(other))).toBe(true)
     expect(requests.some((request) => request.url.startsWith(BASE))).toBe(false)
   })
 

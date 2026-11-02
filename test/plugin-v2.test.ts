@@ -85,9 +85,11 @@ describe('OpenCode 2 plugin entrypoint', () => {
     })
     // OpenCode 1.18.x embeds a v2 plugin host whose context exposes `catalog`
     // instead of `provider`; the legacy `server()` entrypoint serves that host.
+    const integration = { transform: vi.fn() }
     const context = {
       options: {},
       catalog: { transform: vi.fn(), reload: vi.fn() },
+      integration,
     } as unknown as Context
 
     const cleanup = await plugin.setup(context)
@@ -95,6 +97,8 @@ describe('OpenCode 2 plugin entrypoint', () => {
     expect(cleanup).toBeUndefined()
     expect(log).not.toHaveBeenCalled()
     expect(globalThis.fetch).not.toHaveBeenCalled()
+    // The sign-in belongs to server()'s auth hook there; LiteLLM is never claimed twice.
+    expect(integration.transform).not.toHaveBeenCalled()
   })
 
   it('registers discovered LiteLLM models through the provider transform', async () => {

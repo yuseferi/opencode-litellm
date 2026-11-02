@@ -6,7 +6,8 @@ import { normalizeBaseURL } from './litellm-api'
 
 // Cap for each login and refresh request to the proxy or the identity provider.
 const REQUEST_TIMEOUT_MS = 10_000
-// How long a browser sign-in may take; the connect attempt expires with it.
+// How long a browser sign-in may take, as long as OpenCode 2 gives an OAuth attempt by default; the
+// connect attempt expires with it.
 const CALLBACK_TIMEOUT_MS = 10 * 60 * 1000
 const CLI_SSO_POLL_INTERVAL_MS = 2_000
 const CLI_SSO_EXPIRES_IN_SECONDS = 600
@@ -14,6 +15,9 @@ const CLI_SSO_EXPIRES_IN_SECONDS = 600
 const CLI_TOKEN_LIFETIME_MS = 24 * 60 * 60 * 1000
 const CLI_AUTH_DISCOVERY_PATH = '/.well-known/litellm-cli-auth'
 const OIDC_DISCOVERY_PATH = '/.well-known/openid-configuration'
+// Where a pasted UI token still works but cannot become a virtual key: no key-generation rights
+// (403), no `/key/generate` route (404), or no database (500).
+const KEEPS_PASTED_TOKEN: ReadonlySet<number> = new Set([403, 404, 500])
 /** Expiry of a token that carries none, such as a virtual key without `expires`. */
 const NEVER_EXPIRES = Number.MAX_SAFE_INTEGER
 // Persisted in credential metadata; never rename.
@@ -91,6 +95,11 @@ function expiresIn(seconds: number): number {
 
 function requestSignal(): AbortSignal {
   return AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+}
+
+/** A rate limit or server error: retrying can still reach a flow that falling back would give up. */
+function transientStatus(status: number): boolean {
+  return status === 429 || status >= 500
 }
 
 function authHeaders(headers: ProxyHeaders, contentType?: string): Headers {
@@ -457,6 +466,8 @@ async function listenForCallback(label: string, ports: readonly number[]): Promi
     settle({ error: new Error(`${label} callback failed to start`) })
     throw new Error(`${label} callback failed to start`)
   }
+  // A later server error, such as EMFILE on accept, ends the sign-in instead of crashing OpenCode.
+  server.on('error', (error) => settle({ error }))
   return {
     redirectUri: `http://127.0.0.1:${address.port}/callback`,
     state,
@@ -479,12 +490,14 @@ async function discoverPkce(
     redirect: 'manual',
     signal: requestSignal(),
   })
-  if (response.status === 404) return undefined
-  if (!response.ok) throw new Error(`LiteLLM CLI auth discovery failed (HTTP ${response.status})`)
-  const data = await readJson(response, 'LiteLLM CLI auth discovery')
-  if (!isRecord(data) || data.contract_version !== 1) {
-    throw new Error('LiteLLM CLI auth discovery has unsupported contract version')
+  if (transientStatus(response.status)) {
+    throw new Error(`LiteLLM CLI auth discovery failed (HTTP ${response.status})`)
   }
+  // Anything but a contract this plugin speaks means the proxy does not offer it here: a missing
+  // route, an access gateway's 401/403, a page from a catch-all route, or another contract version.
+  if (!response.ok) return undefined
+  const data: unknown = await response.json().catch(() => undefined)
+  if (!isRecord(data) || data.contract_version !== 1) return undefined
   if (
     !Array.isArray(data.code_challenge_methods_supported) ||
     !data.code_challenge_methods_supported.includes('S256')
@@ -609,8 +622,12 @@ async function startCliSso(root: string, headers: ProxyHeaders): Promise<CliSsoS
     redirect: 'manual',
     signal: requestSignal(),
   })
-  if (response.status === 404 || response.status === 405) return undefined
-  if (!response.ok) throw new Error(`LiteLLM CLI SSO start failed (HTTP ${response.status})`)
+  if (transientStatus(response.status)) {
+    throw new Error(`LiteLLM CLI SSO start failed (HTTP ${response.status})`)
+  }
+  // Not offered here, as on proxies without it (404/405) or behind an access gateway (401/403); a
+  // token pasted from the LiteLLM UI may still work.
+  if (!response.ok) return undefined
   const data = await readJson(response, 'LiteLLM CLI SSO start')
   if (
     !isRecord(data) ||
@@ -717,11 +734,12 @@ async function pollCliSso(
   throw new Error('LiteLLM CLI SSO login expired')
 }
 
+/** Exchanges a pasted UI token for a virtual key, or undefined when the proxy cannot mint one. */
 async function generateVirtualKey(
   root: string,
   userToken: string,
   headers: ProxyHeaders,
-): Promise<{ key: string; expires?: number }> {
+): Promise<{ key: string; expires?: number } | undefined> {
   const response = await fetch(`${root}/key/generate`, {
     method: 'POST',
     headers: {
@@ -733,6 +751,15 @@ async function generateVirtualKey(
     redirect: 'manual',
     signal: requestSignal(),
   })
+  if (KEEPS_PASTED_TOKEN.has(response.status)) {
+    console.log(
+      `[opencode-litellm] Using the pasted LiteLLM token directly; /key/generate answered HTTP ${response.status}`,
+    )
+    return undefined
+  }
+  if (response.status === 401) {
+    throw new Error('LiteLLM rejected the pasted token; sign in again and paste a current one')
+  }
   if (!response.ok) throw new Error(`/key/generate failed (HTTP ${response.status})`)
   const data = await readJson(response, '/key/generate')
   if (!isRecord(data) || !isAuthToken(data.key)) throw new Error('/key/generate returned no key')
@@ -753,27 +780,20 @@ function authorizePastedToken(root: string, headers: ProxyHeaders): SsoAuthoriza
         .replace(/^Bearer\s+/i, '')
         .trim()
       if (!isAuthToken(token)) throw new Error('Paste the token from the LiteLLM UI')
-      try {
-        const generated = await generateVirtualKey(root, token, headers)
-        return {
-          access: generated.key,
-          refresh: '',
-          expires: generated.expires ?? NEVER_EXPIRES,
-          metadata: { baseURL: root },
-        }
-      } catch (error) {
-        // `/key/generate` needs a database and key-generation rights; the UI token works on its own.
-        const message = error instanceof Error ? error.message : String(error)
-        console.log(
-          `[opencode-litellm] Using the pasted LiteLLM token directly; no virtual key: ${message}`,
-        )
-        return {
-          access: token,
-          refresh: '',
-          expires: tokenExpiry(token, NEVER_EXPIRES),
-          metadata: { baseURL: root },
-        }
-      }
+      const generated = await generateVirtualKey(root, token, headers)
+      return generated
+        ? {
+            access: generated.key,
+            refresh: '',
+            expires: generated.expires ?? NEVER_EXPIRES,
+            metadata: { baseURL: root },
+          }
+        : {
+            access: token,
+            refresh: '',
+            expires: tokenExpiry(token, NEVER_EXPIRES),
+            metadata: { baseURL: root },
+          }
     },
   }
 }
@@ -819,14 +839,12 @@ export function parseOidcConfig(raw: {
   const scope = raw.scope?.trim() || 'openid'
   if (!scope.split(/\s+/).includes('openid'))
     throw invalid('scopes', 'a space-separated list that includes "openid"')
-  const redirectPorts = (raw.redirectPorts ?? '')
-    .split(/[\s,]+/)
-    .filter(Boolean)
-    .map(Number)
-  if (!redirectPorts.every((port) => Number.isInteger(port) && port >= 1 && port <= 65535)) {
+  const ports = (raw.redirectPorts ?? '').split(/[\s,]+/).filter(Boolean)
+  // Digits only: Number() would also take forms like 0x10 or 1e3.
+  if (!ports.every((port) => /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535)) {
     throw invalid('redirect ports', 'port numbers from 1 to 65535')
   }
-  return { issuer, clientId, scope, redirectPorts }
+  return { issuer, clientId, scope, redirectPorts: ports.map(Number) }
 }
 
 async function discoverOidc(
@@ -947,7 +965,7 @@ export async function refreshSsoToken(
     )
   } else if (metadata.flow === OIDC_FLOW && isAuthToken(token.refresh)) {
     const tokenEndpoint = httpsUrl(metadata.tokenEndpoint, { allowQuery: true })
-    const { issuer, clientId, subject } = metadata
+    const { issuer, clientId, subject, scope } = metadata
     if (
       !tokenEndpoint ||
       typeof issuer !== 'string' ||
@@ -963,6 +981,8 @@ export async function refreshSsoToken(
         grant_type: 'refresh_token',
         refresh_token: token.refresh,
         client_id: clientId,
+        // Some identity providers want the original scope on a refresh; the others ignore it.
+        ...(typeof scope === 'string' && scope ? { scope } : {}),
       }),
       { issuer, clientId, subject },
       token.refresh,

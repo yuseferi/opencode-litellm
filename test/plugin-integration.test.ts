@@ -922,4 +922,209 @@ describe('connect dialog integration', () => {
 
     await cleanup?.()
   })
+
+  it('reads the form answers from both credential fields, preferring metadata', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-answers-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    globalThis.fetch = discoveryFetch([{ id: 'answers-model' }])
+
+    const integration = makeIntegration()
+    integration.active.mockResolvedValue({ type: 'credential', id: 'cred-1' })
+    integration.resolve.mockResolvedValue({
+      type: 'key',
+      key: 'connected-key',
+      configuration: { baseURL: 'http://127.0.0.1:44513/v1', providerID: 'from-configuration' },
+      // Metadata that holds only some answers, or none, must not hide the others.
+      metadata: { providerID: 'gateway', label: 'example' },
+    })
+
+    const registered: RegisteredEntry[] = []
+    const context = {
+      app: { name: 'OpenCode', version: '2.1.0', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(makeStatefulEditor(registered, []) as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      integration,
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    expect(registered).toHaveLength(1)
+    expect(registered[0].info).toMatchObject({ id: 'gateway', integrationID: 'litellm' })
+    expect(registered[0].info.settings).toMatchObject({ baseURL: 'http://127.0.0.1:44513/v1' })
+
+    await cleanup?.()
+  })
+
+  it('does not probe local ports for a sign-in that names no proxy', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-sso-probe-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const requests: string[] = []
+    // Every port answers, even without a key, and discovery would send the token to the first.
+    globalThis.fetch = vi.fn(async (input) => {
+      requests.push(String(input))
+      return discoveryFetch([{ id: 'local-model' }])(input)
+    })
+
+    const integration = makeIntegration()
+    integration.active.mockResolvedValue({ type: 'credential', id: 'cred-oidc', method: 'oauth', label: 'LiteLLM' })
+    integration.resolve.mockResolvedValue({
+      type: 'oauth',
+      methodID: 'oidc',
+      access: 'example-id-token',
+      refresh: '',
+      expires: Date.now() + 3_600_000,
+      metadata: {
+        flow: 'oidc_pkce',
+        issuer: 'https://idp.example.com',
+        clientId: 'example-client',
+        subject: 'example-user',
+        providerID: 'litellm',
+      },
+    })
+    const registered: RegisteredEntry[] = []
+    const context = {
+      app: { name: 'OpenCode', version: '2.1.0', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(makeStatefulEditor(registered, []) as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      integration,
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    expect(requests).toEqual([])
+    expect(registered).toHaveLength(0)
+
+    await cleanup?.()
+  })
+
+  it('does not send a sign-in to a provider configured for another proxy', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-sso-elsewhere-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const authorizationHeaders: string[] = []
+    globalThis.fetch = vi.fn(async (input, init) => {
+      authorizationHeaders.push(new Headers(init?.headers).get('Authorization') ?? '')
+      return discoveryFetch([{ id: 'configured-model' }])(input)
+    })
+
+    const integration = makeIntegration()
+    integration.active.mockResolvedValue({ type: 'credential', id: 'cred-sso', method: 'oauth', label: 'LiteLLM' })
+    integration.resolve.mockResolvedValue({
+      type: 'oauth',
+      methodID: 'sso',
+      access: 'example-access',
+      refresh: 'example-refresh',
+      expires: Date.now() + 3_600_000,
+      metadata: { flow: 'litellm_cli_pkce', baseURL: 'https://llm.example.com', providerID: 'litellm' },
+    })
+    // The provider was pointed at another proxy after the sign-in.
+    const configuredProvider = {
+      id: 'litellm',
+      name: 'LiteLLM',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      settings: { baseURL: 'http://127.0.0.1:44514/v1' },
+    }
+    const registered: RegisteredEntry[] = [{ info: { ...configuredProvider }, models: [] }]
+    const context = {
+      app: { name: 'OpenCode', version: '2.1.0', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [configuredProvider] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(makeStatefulEditor(registered, []) as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      integration,
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    expect(registered[0].models.map((model) => model.id)).toEqual(['configured-model'])
+    expect(authorizationHeaders.length).toBeGreaterThan(0)
+    expect(authorizationHeaders).not.toContain('Bearer example-access')
+    expect(registered[0].info).not.toHaveProperty('integrationID')
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('Not using the LiteLLM sign-in for https://llm.example.com'),
+    )
+
+    await cleanup?.()
+  })
+
+  it("signs in again to the current sign-in's proxy when none is configured", async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-sso-previous-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    globalThis.fetch = vi.fn(async (input) =>
+      String(input).endsWith('/sso/cli/start')
+        ? new Response('method not allowed', { status: 405 })
+        : new Response('not found', { status: 404 }),
+    )
+
+    const integration = makeIntegration()
+    integration.active.mockResolvedValue({ type: 'credential', id: 'cred-sso', method: 'oauth', label: 'LiteLLM' })
+    const credential = {
+      type: 'oauth',
+      methodID: 'sso',
+      access: 'example-ui-token',
+      refresh: '',
+      expires: Date.now() + 3_600_000,
+      metadata: { baseURL: 'https://llm.example.com', providerID: 'litellm' },
+    }
+    integration.resolve.mockResolvedValue(credential)
+    const context = {
+      app: { name: 'OpenCode', version: '2.1.0', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
+        reload: vi.fn(async () => {}),
+      },
+      integration,
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+    const sso = integration.methodUpdate.mock.calls
+      .map((call) => call[0])
+      .find((entry) => entry.method.id === 'sso') as {
+      authorize: (answer: Record<string, unknown>) => Promise<{ url: string }>
+      refresh: (credential: Record<string, unknown>) => Promise<Record<string, unknown>>
+    }
+
+    // Renewing a sign-in never resolves the connection it renews, which would refresh it again.
+    const resolved = integration.resolve.mock.calls.length
+    await expect(sso.refresh(credential)).resolves.toEqual(credential)
+    expect(integration.resolve).toHaveBeenCalledTimes(resolved)
+    // No provider is published for this id, as before the first publication or after a rename.
+    await expect(sso.authorize({ providerID: 'team' })).resolves.toMatchObject({
+      url: 'https://llm.example.com/sso/key/generate',
+    })
+    // The previous proxy is only a default.
+    await expect(sso.authorize({ baseURL: 'https://other.example.com' })).resolves.toMatchObject({
+      url: 'https://other.example.com/sso/key/generate',
+    })
+
+    await cleanup?.()
+  })
 })
