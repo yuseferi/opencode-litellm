@@ -192,6 +192,77 @@ describe('OpenCode 1 config hook', () => {
     expect(readModelCacheEntry(plainKey)).toBeNull()
   })
 
+  it('resolves provider placeholders against the Responses sibling that owns the model', async () => {
+    useIsolatedState()
+    const baseURL = 'http://127.0.0.1:45561/v1'
+    mockProxy([
+      { id: 'chat-model', mode: 'chat' },
+      { id: 'responses-model', mode: 'responses' },
+    ])
+
+    const plugin = await LiteLLMPlugin({
+      client: { app: { log: vi.fn(async () => {}) } },
+    } as never)
+    const config: OpenCodeConfig = {
+      provider: {
+        'litellm-team-a': {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'Team A',
+          options: {
+            baseURL,
+            apiKey: 'example-key',
+            modelNameTemplate: '{name} ({provider_id} / {provider_name})',
+          },
+          models: {},
+        },
+      },
+    }
+    await plugin.config!(config as never)
+
+    expect(config.provider['litellm-team-a'].models?.['chat-model']).toMatchObject({
+      name: 'Chat Model (litellm-team-a / Team A)',
+    })
+    // Responses models are served by the sibling provider, so the template
+    // must name the provider the user will actually select.
+    expect(
+      config.provider['litellm-team-a-responses'].models?.['responses-model'],
+    ).toMatchObject({
+      name: 'Responses Model (litellm-team-a-responses / Team A Responses)',
+    })
+  })
+
+  it('labels the Responses sibling from the provider id when the base has no name', async () => {
+    useIsolatedState()
+    const baseURL = 'http://127.0.0.1:45562/v1'
+    mockProxy([{ id: 'responses-model', mode: 'responses' }])
+
+    const plugin = await LiteLLMPlugin({
+      client: { app: { log: vi.fn(async () => {}) } },
+    } as never)
+    const config: OpenCodeConfig = {
+      provider: {
+        'litellm-team-c': {
+          npm: '@ai-sdk/openai-compatible',
+          options: {
+            baseURL,
+            apiKey: 'example-key',
+            modelNameTemplate: '{name} ({provider_name})',
+          },
+          models: {},
+        },
+      },
+    }
+    await plugin.config!(config as never)
+
+    // Unnamed: the picker falls back to ids, so `{provider_name}` does too.
+    expect(config.provider['litellm-team-c-responses'].name).toBe('litellm-team-c Responses')
+    expect(
+      config.provider['litellm-team-c-responses'].models?.['responses-model'],
+    ).toMatchObject({
+      name: 'Responses Model (litellm-team-c Responses)',
+    })
+  })
+
   it('routes Responses models to a sibling provider, leaving chat models alone', async () => {
     useIsolatedState()
     const baseURL = 'http://127.0.0.1:45551/v1'

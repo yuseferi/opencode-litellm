@@ -140,7 +140,7 @@ export function categorizeModel(model: LiteLLMModel): 'chat' | 'embedding' | 'im
  *   "litellm/kimi-k2.5"                   -> "Kimi K2.5"
  *   "litellm/minimax-m2.5"                -> "MiniMax M2.5"
  */
-export function formatModelName(model: LiteLLMModel): string {
+export function formatModelName(model: Pick<LiteLLMModel, 'id'>): string {
   const { id } = model
 
   // Drop provider prefix when present, but only the FIRST segment, so

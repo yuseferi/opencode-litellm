@@ -414,9 +414,10 @@ async function makeProviderSource(
   const compatibility = parseModelCompatibility(settings.modelCompatibility)
   const formatModelNames = readFormatModelNames(settings)
   const modelNameTemplate = readModelNameTemplate(settings)
-  // Same value the host publishes as the provider's display name, so
-  // `{provider_name}` matches what the picker shows.
-  const providerName = provider?.name || 'LiteLLM (proxy)'
+  // The provider's configured name, or its id when none is set — the same
+  // fallback `{provider_name}` documents, so two unnamed providers stay
+  // distinguishable.
+  const providerName = provider?.name || id
   const naming = { formatModelNames, modelNameTemplate, providerId: id, providerName }
   // Explicit config beats the URL typed into the dialog, which beats the
   // environment and local port probing.

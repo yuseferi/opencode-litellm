@@ -533,6 +533,7 @@ Several providers can point at the same LiteLLM proxy with different keys. Every
 - An explicit `models.<id>.name` still wins and is never templated.
 - Unknown placeholders are left as written, and substitution is single-pass: a placeholder that appears inside a resolved value stays literal.
 - Non-string and empty values are ignored.
+- On OpenCode 1, models that need the Responses API are served by a `<provider>-responses` sibling, so `{provider_id}` and `{provider_name}` resolve to that sibling for those models (for example `litellm-team-a-responses`).
 - Like `formatModelNames`, the template is part of the cache identity — and so is the resolved provider name — so changing either starts a fresh discovery on the next start instead of serving previously cached names.
 - Model ids, capability flags, pricing and filtering are unaffected.
 

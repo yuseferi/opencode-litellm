@@ -934,6 +934,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
       settings: {
         baseURL: `${baseURL}/v1`,
         apiKey: 'example-api-key',
+        modelNameTemplate: '{name} ({provider_id})',
       },
       headers: {},
     }
@@ -959,7 +960,7 @@ describe('OpenCode 2 plugin entrypoint', () => {
     }
     const context = {
       app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
-      options: { modelNameTemplate: '{name} ({provider_id})' },
+      options: {},
       provider: {
         list: vi.fn(async () => ({ data: [configuredProvider] })),
         transform: vi.fn(async (transform: (editor: unknown) => void) => {
@@ -978,8 +979,11 @@ describe('OpenCode 2 plugin entrypoint', () => {
     )
     expect(discovered?.name).toBe('Claude 3.5 Sonnet (litellm-team-a)')
     expect(updatedModels.find((model) => model.id === 'curated-model')?.name).toBe('Hand-picked')
-    // Plugin-only naming controls never reach the host's provider settings.
-    expect(configuredProvider.settings).not.toHaveProperty('modelNameTemplate')
+    // The host's own settings are preserved so later reconciles can re-derive
+    // the naming; only plugin-level options are kept out (see the fallback test).
+    expect(configuredProvider.settings).toMatchObject({
+      modelNameTemplate: '{name} ({provider_id})',
+    })
 
     const cacheKey = buildCacheKey(
       'litellm-team-a',
@@ -992,6 +996,73 @@ describe('OpenCode 2 plugin entrypoint', () => {
     expect(readModelCacheEntry(cacheKey)?.models['anthropic/claude-3-5-sonnet']).toMatchObject({
       name: 'Claude 3.5 Sonnet (litellm-team-a)',
     })
+
+    await cleanup?.()
+  })
+
+  it('falls back to the provider id for {provider_name} on an unnamed provider', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-template-fallback-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                model_name: 'company/chat',
+                model_info: { key: 'company/chat', mode: 'chat' },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({ data: [{ id: 'company/chat', object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    const registered: Array<{
+      info: Record<string, unknown>
+      models: Array<Record<string, unknown>>
+    }> = []
+    const editor = {
+      list: () => [],
+      get: () => undefined,
+      add: (entry: { info: Record<string, unknown>; models: Array<Record<string, unknown>> }) => {
+        registered.push(entry)
+      },
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: { set: vi.fn(), update: vi.fn(), remove: vi.fn() },
+    }
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: {
+        baseURL: 'http://127.0.0.1:44447/v1',
+        apiKey: 'example-api-key',
+        modelNameTemplate: '{name} ({provider_name})',
+      },
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(editor as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    // No configured name: the id is more useful than a shared label, and two
+    // unnamed providers stay distinguishable.
+    expect(registered[0].models.map((model) => model.name)).toEqual(['Chat (litellm)'])
+    // A plugin-level option never lands in the host's provider settings.
+    expect(registered[0].info.settings).not.toHaveProperty('modelNameTemplate')
 
     await cleanup?.()
   })
