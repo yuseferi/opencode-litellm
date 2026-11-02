@@ -8,8 +8,11 @@ import {
   normalizeBaseURL,
 } from '../utils/litellm-api'
 import {
+  applyModelNameTemplate,
+  DEFAULT_MODEL_NAME_TEMPLATE,
   formatModelName,
   categorizeModel,
+  type ModelNaming,
 } from '../utils/format-model-name'
 import { requiresResponsesAPI } from '../utils/transport'
 import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
@@ -114,6 +117,8 @@ interface RefreshContext {
   filters: ModelFilters
   capabilities: ModelCapabilities
   formatModelNames: boolean
+  modelNameTemplate?: string
+  providerName: string
   providerId: string
 }
 const refreshContexts = new Map<string, RefreshContext>()
@@ -232,6 +237,20 @@ export function readFormatModelNames(options: Record<string, unknown>): boolean 
 }
 
 /**
+ * Read the optional display-name template. Non-strings are ignored. An empty
+ * string, or the `"{name}"` default spelled out, counts as unset so those
+ * configs keep the same cache identity (and the same warm cache) as before
+ * the setting existed.
+ */
+export function readModelNameTemplate(options: Record<string, unknown>): string | undefined {
+  const value = options.modelNameTemplate
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (trimmed === '' || trimmed === DEFAULT_MODEL_NAME_TEMPLATE) return undefined
+  return value
+}
+
+/**
  * Overlay metadata onto a `/v1/models` entry in three tiers: the entry's
  * own fields win, `/v1/model/info` fills gaps (notably `mode`, which
  * `/v1/models` omits for database-defined models), and finally
@@ -283,20 +302,29 @@ const USD_PER_TOKEN_TO_PER_MILLION = 1_000_000
  * image, audio) — they can't be used as primary chat models and would
  * clutter the picker.
  *
- * Exported for tests: `formatModelNames` decides whether the display
- * name is the prettified id or the raw `/v1/models` id verbatim.
+ * Exported for tests: the `naming` options decide the display name — the
+ * prettified id or the raw `/v1/models` id, optionally wrapped in the
+ * provider's `modelNameTemplate`.
  */
 export function toConfigModel(
   model: LiteLLMModel,
   info?: LiteLLMModelInfo,
-  formatModelNames = true,
+  naming: ModelNaming = {},
 ): Record<string, unknown> | null {
   const type = categorizeModel(model)
   if (type === 'embedding' || type === 'image' || type === 'audio') {
     return null
   }
+  const providerId = naming.providerId ?? ''
   const entry: Record<string, unknown> = {
-    name: formatModelNames ? formatModelName(model) : model.id,
+    name: applyModelNameTemplate(naming.modelNameTemplate, {
+      name: naming.formatModelNames === false ? model.id : formatModelName(model),
+      id: model.id,
+      providerId,
+      // Without a configured display name the picker falls back to the id,
+      // so the placeholder resolves to the same thing the user sees.
+      providerName: naming.providerName ?? providerId,
+    }),
   }
   // Some deployments only report the OpenAI-style `max_tokens` total;
   // use it as the context limit when `max_input_tokens` is absent.
@@ -389,9 +417,9 @@ export interface DiscoveredModels {
  * classifies + formats each model, and returns the built entries plus the
  * ids that require the Responses API and per-model hints. The provider's
  * `includeModels`/`excludeModels` filters, `modelCapabilities` overrides and
- * `formatModelNames` choice are applied here (not at merge time) so every
- * path that persists or serves a cache — cold discovery and background
- * refresh — writes the same adjusted view.
+ * naming choices (`formatModelNames`, `modelNameTemplate`) are applied here
+ * (not at merge time) so every path that persists or serves a cache — cold
+ * discovery and background refresh — writes the same adjusted view.
  *
  * Returns `null` when the proxy is unreachable/unauthorized or exposes
  * no models, so callers can distinguish "no data" from "empty result".
@@ -403,7 +431,7 @@ export async function discoverModels(
   providerId: string,
   filters: ModelFilters = {},
   capabilities: ModelCapabilities = {},
-  formatModelNames = true,
+  naming: ModelNaming = {},
 ): Promise<DiscoveredModels | null> {
   if (!(await checkLiteLLMHealth(baseURL, apiKey, customHeaders))) {
     log(
@@ -478,7 +506,7 @@ export async function discoverModels(
     const info = infoByName?.get(model.id)
     if (infoByName && !info) unmatched.push(model.id)
     const enriched = enrichModel(model, info, capabilities[model.id])
-    const entry = toConfigModel(enriched, info, formatModelNames)
+    const entry = toConfigModel(enriched, info, { ...naming, providerId })
     if (!entry) {
       skipped++
       continue
@@ -712,7 +740,12 @@ async function backgroundRefresh(cacheKey: string): Promise<void> {
         ctx.providerId,
         ctx.filters,
         ctx.capabilities,
-        ctx.formatModelNames,
+        {
+          formatModelNames: ctx.formatModelNames,
+          modelNameTemplate: ctx.modelNameTemplate,
+          providerId: ctx.providerId,
+          providerName: ctx.providerName,
+        },
       ),
       DISCOVERY_TIMEOUT_MS,
     )
@@ -870,6 +903,11 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         const filters = readModelFilters(options)
         const capabilities = parseModelCapabilities(options.modelCapabilities)
         const formatModelNames = readFormatModelNames(options)
+        const modelNameTemplate = readModelNameTemplate(options)
+        // `{provider_name}` resolves to what the picker labels the provider
+        // with; OpenCode falls back to the id when no name is configured.
+        const providerName =
+          typeof provider.name === 'string' && provider.name ? provider.name : providerId
 
         // Resolve base URL
         let baseURL: string | null = null
@@ -944,6 +982,8 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         // the provider keeps its models and can be reconnected from `/connect`.
         const cacheKey = buildCacheKey(providerId, baseURL, filters, capabilities, {
           formatModelNames,
+          modelNameTemplate,
+          providerName,
         }, sso ? ssoIdentity(sso) : apiKey)
 
         // Remember how to reach this proxy so the `event` hook can
@@ -960,6 +1000,8 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
           filters,
           capabilities,
           formatModelNames,
+          modelNameTemplate,
+          providerName,
           providerId,
         })
 
@@ -1026,7 +1068,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
             providerId,
             filters,
             capabilities,
-            formatModelNames,
+            { formatModelNames, modelNameTemplate, providerId, providerName },
           ),
           DISCOVERY_TIMEOUT_MS,
         )

@@ -159,6 +159,23 @@ describe('buildCacheKey', () => {
     expect(keyA).not.toContain('sk-key-a')
   })
 
+  it('combines the credential fingerprint with the naming fingerprint', () => {
+    // Rebase of the SSO credential keying (main) onto the modelNameTemplate
+    // keying (#55): both dimensions isolate the cached model view together —
+    // a different credential under the same template, or the same credential
+    // under a different template, each start a fresh discovery.
+    const template = { modelNameTemplate: '{name} ({provider_name})', providerName: 'Team A' }
+    const keyA = buildCacheKey('litellm', 'http://localhost:4000', {}, {}, template, 'sk-key-a')
+    const keyA2 = buildCacheKey('litellm', 'http://localhost:4000', {}, {}, template, 'sk-key-a')
+    const keyB = buildCacheKey('litellm', 'http://localhost:4000', {}, {}, template, 'sk-key-b')
+    const keyATemplateless = buildCacheKey('litellm', 'http://localhost:4000', {}, {}, {}, 'sk-key-a')
+    expect(keyA).toBe(keyA2)
+    expect(keyA).not.toBe(keyB)
+    expect(keyA).not.toBe(keyATemplateless)
+    // The fingerprint never carries the raw key.
+    expect(keyA).not.toContain('sk-key-a')
+  })
+
   it('changes the key when capability overrides are added or changed', () => {
     // Regression for the CodeRabbit review finding: a model previously
     // cached with `supports_vision: false` must not be served again
@@ -211,6 +228,36 @@ describe('buildCacheKey', () => {
       {},
     )
     expect(rawWithFilters).not.toBe(formattedWithFilters)
+  })
+
+  it('keeps the plain key when no template is set, whatever the provider name', () => {
+    // Provider id is already part of the base key; the display name only
+    // matters to `{provider_name}`, so renaming without a template must not
+    // throw away a warm cache.
+    expect(
+      buildCacheKey('litellm', 'http://localhost:4000', {}, {}, { providerName: 'Team A' }),
+    ).toBe(KEY)
+  })
+
+  it('changes the key when a modelNameTemplate is set', () => {
+    // Templated names are baked into cached entries, so an unset or changed
+    // template must start a fresh discovery instead of serving stale names.
+    const templated = buildCacheKey('litellm', 'http://localhost:4000', {}, {}, {
+      modelNameTemplate: '{name} ({provider_name})',
+      providerName: 'Team A',
+    })
+    expect(templated).not.toBe(KEY)
+    expect(templated.startsWith(KEY)).toBe(true)
+  })
+
+  it('changes the key when the provider name changes under a template', () => {
+    const key = (providerName: string) =>
+      buildCacheKey('litellm', 'http://localhost:4000', {}, {}, {
+        modelNameTemplate: '{name} ({provider_name})',
+        providerName,
+      })
+    expect(key('Team A')).not.toBe(key('Team B'))
+    expect(key('Team A')).toBe(key('Team A'))
   })
 
   it('changes the key when includeModels/excludeModels are added', () => {

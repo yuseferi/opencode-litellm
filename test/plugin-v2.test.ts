@@ -901,6 +901,101 @@ describe('OpenCode 2 plugin entrypoint', () => {
     await cleanup?.()
   })
 
+  it('applies modelNameTemplate to discovered names without leaking the setting', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-template-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    const baseURL = 'http://127.0.0.1:44446'
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                model_name: 'anthropic/claude-3-5-sonnet',
+                model_info: { key: 'anthropic/claude-3-5-sonnet', mode: 'chat' },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({ data: [{ id: 'anthropic/claude-3-5-sonnet', object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    const configuredProvider = {
+      id: 'litellm-team-a',
+      name: 'Team A',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      settings: {
+        baseURL: `${baseURL}/v1`,
+        apiKey: 'example-api-key',
+      },
+      headers: {},
+    }
+    const curatedModel = { id: 'curated-model', name: 'Hand-picked' }
+    const configuredRecord = {
+      provider: configuredProvider,
+      models: new Map([['curated-model', curatedModel]]),
+    }
+    let updatedModels: Array<Record<string, unknown>> = []
+    const editor = {
+      list: () => [configuredRecord],
+      get: () => configuredRecord,
+      add: vi.fn(),
+      update: vi.fn((_id, update) => update(configuredProvider)),
+      remove: vi.fn(),
+      models: {
+        set: vi.fn((_id, models: Array<Record<string, unknown>>) => {
+          updatedModels = models
+        }),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
+    }
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: { modelNameTemplate: '{name} ({provider_id})' },
+      provider: {
+        list: vi.fn(async () => ({ data: [configuredProvider] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(editor as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    const discovered = updatedModels.find(
+      (model) => model.id === 'anthropic/claude-3-5-sonnet',
+    )
+    expect(discovered?.name).toBe('Claude 3.5 Sonnet (litellm-team-a)')
+    expect(updatedModels.find((model) => model.id === 'curated-model')?.name).toBe('Hand-picked')
+    // Plugin-only naming controls never reach the host's provider settings.
+    expect(configuredProvider.settings).not.toHaveProperty('modelNameTemplate')
+
+    const cacheKey = buildCacheKey(
+      'litellm-team-a',
+      baseURL,
+      {},
+      {},
+      { modelNameTemplate: '{name} ({provider_id})', providerName: 'Team A' },
+      'example-api-key',
+    )
+    expect(readModelCacheEntry(cacheKey)?.models['anthropic/claude-3-5-sonnet']).toMatchObject({
+      name: 'Claude 3.5 Sonnet (litellm-team-a)',
+    })
+
+    await cleanup?.()
+  })
+
   it('reloads the provider registry when a background discovery changes models', async () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-refresh-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory

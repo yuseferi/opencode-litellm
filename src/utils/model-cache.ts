@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { ModelNaming } from './format-model-name'
 
 /**
  * Facts about a discovered model's upstream that OpenCode 2 turns into
@@ -98,19 +99,23 @@ function canonicalize(value: unknown): string {
 /**
  * Cache identity for a provider's model view. `providerId@baseURL`
  * alone isn't enough: `includeModels`/`excludeModels`,
- * `modelCapabilities` and `formatModelNames` are baked into cached
- * entries by discovery, so a config change must not reuse the old cache
- * — it would keep serving the previous adjusted view until a second
- * restart. A fingerprint is appended whenever adjustments exist
- * (pattern order ignored); default configs keep the plain key so
- * existing caches stay warm across plugin upgrades.
+ * `modelCapabilities` and the naming choices (`formatModelNames`,
+ * `modelNameTemplate`) are baked into cached entries by discovery, so a
+ * config change must not reuse the old cache — it would keep serving the
+ * previous adjusted view until a second restart. A fingerprint is appended
+ * whenever adjustments exist (pattern order ignored); default configs keep
+ * the plain key so existing caches stay warm across plugin upgrades.
+ *
+ * `providerName` only matters when a template is set: `{provider_name}`
+ * resolves to it, so renaming a provider must start a fresh discovery too.
+ * The provider id is already part of the base key.
  */
 export function buildCacheKey(
   providerId: string,
   baseURL: string,
   filters: { includeModels?: string[]; excludeModels?: string[] },
   capabilities: Record<string, Record<string, boolean>>,
-  naming: { formatModelNames?: boolean } = {},
+  naming: ModelNaming = {},
   credential?: string,
 ): string {
   let base = `${providerId}@${baseURL}`
@@ -122,21 +127,31 @@ export function buildCacheKey(
     base += `@${createHash('sha256').update(credential).digest('hex').slice(0, 12)}`
   }
   const rawNames = naming.formatModelNames === false
+  const template = naming.modelNameTemplate
   const hasAdjustments =
     (filters.includeModels?.length ?? 0) > 0 ||
     (filters.excludeModels?.length ?? 0) > 0 ||
     Object.keys(capabilities).length > 0 ||
-    rawNames
+    rawNames ||
+    template !== undefined
   if (!hasAdjustments) return base
+  // Omitted keys stay out of the hash entirely: `undefined` would serialize
+  // as the literal string "undefined" and change every existing cache key.
+  const namingFingerprint: Record<string, unknown> = {}
+  // Omitted (not `true`) when formatting is on, so keys for configs that
+  // never touch this option are unchanged.
+  if (rawNames) namingFingerprint.formatModelNames = false
+  if (template !== undefined) {
+    namingFingerprint.modelNameTemplate = template
+    namingFingerprint.providerName = naming.providerName
+  }
   const fingerprint = createHash('sha256')
     .update(
       canonicalize({
         includeModels: filters.includeModels ? [...filters.includeModels].sort() : undefined,
         excludeModels: filters.excludeModels ? [...filters.excludeModels].sort() : undefined,
         capabilities,
-        // Omitted (not `true`) when formatting is on, so keys for
-        // configs that never touch this option are unchanged.
-        formatModelNames: rawNames ? false : undefined,
+        ...namingFingerprint,
       }),
     )
     .digest('hex')

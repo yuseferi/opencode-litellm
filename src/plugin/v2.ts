@@ -9,6 +9,7 @@ import {
   readCustomHeaders,
   readFormatModelNames,
   readModelFilters,
+  readModelNameTemplate,
   withTimeout,
   LiteLLMPlugin,
 } from './index'
@@ -109,6 +110,8 @@ interface ProviderSource {
   capabilities: ModelCapabilities
   compatibility: ModelCompatibility
   formatModelNames: boolean
+  modelNameTemplate?: string
+  providerName: string
   cacheKey: string
   models: Model.Info[]
   /**
@@ -307,6 +310,7 @@ function runtimeSettings(source: ProviderSource): Record<string, unknown> {
     'modelCapabilities',
     'modelCompatibility',
     'formatModelNames',
+    'modelNameTemplate',
     'providerID',
   ]) {
     delete settings[key]
@@ -409,6 +413,11 @@ async function makeProviderSource(
   const capabilities = parseModelCapabilities(settings.modelCapabilities)
   const compatibility = parseModelCompatibility(settings.modelCompatibility)
   const formatModelNames = readFormatModelNames(settings)
+  const modelNameTemplate = readModelNameTemplate(settings)
+  // Same value the host publishes as the provider's display name, so
+  // `{provider_name}` matches what the picker shows.
+  const providerName = provider?.name || 'LiteLLM (proxy)'
+  const naming = { formatModelNames, modelNameTemplate, providerId: id, providerName }
   // Explicit config beats the URL typed into the dialog, which beats the
   // environment and local port probing.
   const detectedBaseURL = configuredBaseURL
@@ -432,9 +441,7 @@ async function makeProviderSource(
   // the raw key): a credential change starts a fresh discovery instead of
   // serving another credential's cached model list. A sign-in is keyed by its
   // credential id, because its access token rotates on every refresh.
-  const cacheKey = buildCacheKey(id, baseURL, filters, capabilities, {
-    formatModelNames,
-  }, (usesConnectionCredential ? connected?.credentialID : undefined) ?? apiKey)
+  const cacheKey = buildCacheKey(id, baseURL, filters, capabilities, naming, (usesConnectionCredential ? connected?.credentialID : undefined) ?? apiKey)
   const cacheEntry = readModelCacheEntry(cacheKey)
   let entries = cacheEntry?.models ?? null
   let responsesIds = cacheEntry?.responsesIds ?? []
@@ -449,7 +456,7 @@ async function makeProviderSource(
         id,
         filters,
         capabilities,
-        formatModelNames,
+        naming,
       ),
       DISCOVERY_TIMEOUT_MS,
     )
@@ -490,6 +497,8 @@ async function makeProviderSource(
     capabilities,
     compatibility,
     formatModelNames,
+    modelNameTemplate,
+    providerName,
     cacheKey,
     models: toProviderModels(id, entries ?? {}, {
       providerPackage,
@@ -549,7 +558,12 @@ async function refreshProviderSource(
           source.id,
           source.filters,
           source.capabilities,
-          source.formatModelNames,
+          {
+            formatModelNames: source.formatModelNames,
+            modelNameTemplate: source.modelNameTemplate,
+            providerId: source.id,
+            providerName: source.providerName,
+          },
         ),
         DISCOVERY_TIMEOUT_MS,
       )
