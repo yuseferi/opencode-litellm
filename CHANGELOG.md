@@ -1,3 +1,10 @@
+# [1.9.0](https://github.com/yuseferi/opencode-litellm/compare/v1.8.1...v1.9.0) (2026-11-03)
+
+
+### Features
+
+* sign in to LiteLLM with SSO or OIDC ([#53](https://github.com/yuseferi/opencode-litellm/issues/53)) ([7badf16](https://github.com/yuseferi/opencode-litellm/commit/7badf165f1ad43aad01f65b31fa87c4ce965d029))
+
 ## [1.8.1](https://github.com/yuseferi/opencode-litellm/compare/v1.8.0...v1.8.1) (2026-10-30)
 
 
