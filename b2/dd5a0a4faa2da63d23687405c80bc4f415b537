@@ -22,6 +22,7 @@ test/plugin-v1.test.ts
   s_69b316747c10bd::t_33f7f5f5296d32 115-194
 CHANGELOG.md
   s_69b316747c10bd::t_f4c9becc66b704 1-5,13
+  s_a41ce6d780063f::t_a7a1e8e7838039 6
 README.md
   s_69b316747c10bd::t_098b0cc56e0740 495-538
 src/plugin/v2.ts
