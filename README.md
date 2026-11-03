@@ -492,6 +492,51 @@ By default the plugin prettifies each discovered id into a display name — `ant
 - Like the other options above, `formatModelNames` is part of the cache identity, so toggling it triggers a fresh discovery on the next start instead of serving previously cached names.
 - To rename just a handful of models while keeping smart formatting for the rest, use the per-model `name` override described in [Overriding or curating individual models](#overriding-or-curating-individual-models-optional).
 
+### Naming models per provider (`modelNameTemplate`)
+
+Several providers can point at the same LiteLLM proxy with different keys. Every key then exposes the same model ids, so the picker shows identical names under each provider and there is no way to tell which key a model will use. `modelNameTemplate` wraps every discovered model's display name with that provider's context:
+
+```jsonc
+{
+  "providers": {
+    "litellm-team-a": {
+      "name": "Team A",
+      "settings": {
+        "baseURL": "https://litellm.example.com/v1",
+        "apiKey": "{env:KEY_A}",
+        "modelNameTemplate": "{name} ({provider_name})"
+      }
+    },
+    "litellm-team-b": {
+      "name": "Team B",
+      "settings": {
+        "baseURL": "https://litellm.example.com/v1",
+        "apiKey": "{env:KEY_B}",
+        "modelNameTemplate": "[B] {name}"
+      }
+    }
+  }
+}
+```
+
+`Claude 3.5 Sonnet` shows up as `Claude 3.5 Sonnet (Team A)` under the first provider and `[B] Claude 3.5 Sonnet` under the second.
+
+| Placeholder | Value |
+| --- | --- |
+| `{name}` | The display name the plugin would produce anyway — formatted, or the raw id when `formatModelNames: false` |
+| `{id}` | The model id exactly as `/v1/models` returned it |
+| `{provider_id}` | The OpenCode provider id, for example `litellm-team-a` |
+| `{provider_name}` | The provider's configured `name`, or its id when no name is set |
+
+- The default is `{name}`, so omitting the setting changes nothing.
+- The template runs after name formatting, so it composes with `formatModelNames: false`.
+- An explicit `models.<id>.name` still wins and is never templated.
+- Unknown placeholders are left as written, and substitution is single-pass: a placeholder that appears inside a resolved value stays literal.
+- Non-string and empty values are ignored.
+- On OpenCode 1, models that need the Responses API are served by a `<provider>-responses` sibling, so `{provider_id}` and `{provider_name}` resolve to that sibling for those models (for example `litellm-team-a-responses`).
+- Like `formatModelNames`, the template is part of the cache identity — and so is the resolved provider name — so changing either starts a fresh discovery on the next start instead of serving previously cached names.
+- Model ids, capability flags, pricing and filtering are unaffected.
+
 ### Prompt caching (`modelCompatibility`)
 
 On OpenCode 2.0.28+ (earlier 2.x releases ignore the setting), the OpenAI-compatible Chat Completions runtime only places Anthropic-style `cache_control` breakpoints when a model declares `compatibility.cacheFormat: "anthropic"`. The plugin sets that for every discovered Chat Completions model whose `/v1/model/info` entry lists `cache_control` under `supported_openai_params` — which LiteLLM reports for Anthropic and Vertex AI Anthropic deployments — so prompt caching keeps working for Claude behind the proxy. Only the Chat Completions runtimes read this setting: the Anthropic Messages runtime adds its own cache breakpoints, and the Responses runtimes do not use it, so models on those packages are left alone.

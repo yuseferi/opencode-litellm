@@ -901,6 +901,172 @@ describe('OpenCode 2 plugin entrypoint', () => {
     await cleanup?.()
   })
 
+  it('applies modelNameTemplate to discovered names without leaking the setting', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-template-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    const baseURL = 'http://127.0.0.1:44446'
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                model_name: 'anthropic/claude-3-5-sonnet',
+                model_info: { key: 'anthropic/claude-3-5-sonnet', mode: 'chat' },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({ data: [{ id: 'anthropic/claude-3-5-sonnet', object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    const configuredProvider = {
+      id: 'litellm-team-a',
+      name: 'Team A',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      settings: {
+        baseURL: `${baseURL}/v1`,
+        apiKey: 'example-api-key',
+        modelNameTemplate: '{name} ({provider_id})',
+      },
+      headers: {},
+    }
+    const curatedModel = { id: 'curated-model', name: 'Hand-picked' }
+    const configuredRecord = {
+      provider: configuredProvider,
+      models: new Map([['curated-model', curatedModel]]),
+    }
+    let updatedModels: Array<Record<string, unknown>> = []
+    const editor = {
+      list: () => [configuredRecord],
+      get: () => configuredRecord,
+      add: vi.fn(),
+      update: vi.fn((_id, update) => update(configuredProvider)),
+      remove: vi.fn(),
+      models: {
+        set: vi.fn((_id, models: Array<Record<string, unknown>>) => {
+          updatedModels = models
+        }),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
+    }
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [configuredProvider] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(editor as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    const discovered = updatedModels.find(
+      (model) => model.id === 'anthropic/claude-3-5-sonnet',
+    )
+    expect(discovered?.name).toBe('Claude 3.5 Sonnet (litellm-team-a)')
+    expect(updatedModels.find((model) => model.id === 'curated-model')?.name).toBe('Hand-picked')
+    // The host's own settings are preserved so later reconciles can re-derive
+    // the naming; only plugin-level options are kept out (see the fallback test).
+    expect(configuredProvider.settings).toMatchObject({
+      modelNameTemplate: '{name} ({provider_id})',
+    })
+
+    const cacheKey = buildCacheKey(
+      'litellm-team-a',
+      baseURL,
+      {},
+      {},
+      { modelNameTemplate: '{name} ({provider_id})', providerName: 'Team A' },
+      'example-api-key',
+    )
+    expect(readModelCacheEntry(cacheKey)?.models['anthropic/claude-3-5-sonnet']).toMatchObject({
+      name: 'Claude 3.5 Sonnet (litellm-team-a)',
+    })
+
+    await cleanup?.()
+  })
+
+  it('falls back to the provider id for {provider_name} on an unnamed provider', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-template-fallback-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                model_name: 'company/chat',
+                model_info: { key: 'company/chat', mode: 'chat' },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({ data: [{ id: 'company/chat', object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    const registered: Array<{
+      info: Record<string, unknown>
+      models: Array<Record<string, unknown>>
+    }> = []
+    const editor = {
+      list: () => [],
+      get: () => undefined,
+      add: (entry: { info: Record<string, unknown>; models: Array<Record<string, unknown>> }) => {
+        registered.push(entry)
+      },
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: { set: vi.fn(), update: vi.fn(), remove: vi.fn() },
+    }
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: {
+        baseURL: 'http://127.0.0.1:44447/v1',
+        apiKey: 'example-api-key',
+        modelNameTemplate: '{name} ({provider_name})',
+      },
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(editor as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    // No configured name: the id is more useful than a shared label, and two
+    // unnamed providers stay distinguishable.
+    expect(registered[0].models.map((model) => model.name)).toEqual(['Chat (litellm)'])
+    // A plugin-level option never lands in the host's provider settings.
+    expect(registered[0].info.settings).not.toHaveProperty('modelNameTemplate')
+
+    await cleanup?.()
+  })
+
   it('reloads the provider registry when a background discovery changes models', async () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-refresh-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory
@@ -1385,6 +1551,639 @@ describe('OpenCode 2 plugin entrypoint', () => {
     expect(lastSettings.baseURL).toBe('http://127.0.0.1:44449/v1')
     await cleanup?.()
   })
+
+  it('re-renders fallback-generated names when a configured provider replaces the fallback', async () => {
+    // Regression for the CodeRabbit review finding (PR #55): a configured
+    // provider replacing a published fallback kept the fallback's model entry
+    // for any id both inventories serve. `providerName` and the model name are
+    // baked in at discovery time, so the stale entry kept the fallback's
+    // rendering (template + unnamed-provider label) forever.
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-provenance-replace-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    process.env.LITELLM_BASE_URL = 'http://127.0.0.1:44560/v1'
+
+    // The plugin options drive the fallback's naming. With no configured
+    // name, `{provider_name}` resolves to the provider id (`litellm`).
+    const fallbackTemplate = '{name} via {provider_name}'
+    // Both inventories serve the same model id under different labels.
+    let inventory = ['company/chat', 'fallback-only-model']
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 })
+      }
+      return new Response(
+        JSON.stringify({ data: inventory.map((id) => ({ id, object: 'model' })) }),
+        { status: 200 },
+      )
+    })
+
+    // The host registers the configured provider only after setup; the
+    // post-subscribe reconcile pass must not see it either, so the swap
+    // happens deterministically on the `provider.updated` event.
+    let providerListCalls = 0
+    const configuredProvider = {
+      id: 'litellm',
+      name: 'Team A Gateway',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      settings: {
+        baseURL: 'http://127.0.0.1:44561/v1',
+        modelNameTemplate: fallbackTemplate,
+      },
+      headers: {},
+    }
+    const providerList = vi.fn(async () => {
+      providerListCalls += 1
+      return { data: providerListCalls <= 2 ? [] : [configuredProvider] }
+    })
+
+    // The registry holds whatever the last transform published. The first
+    // transform (setup) publishes the fallback via `add`; after
+    // `provider.updated` the transform runs again and now sees the fallback's
+    // published entry as the configured provider's current models — exactly
+    // the host state at the moment the configured provider takes over.
+    let registryModels = new Map<string, Record<string, unknown>>()
+    const record = () =>
+      registryModels.size > 0 ? { provider: configuredProvider, models: registryModels } : undefined
+    const editor = {
+      list: () => (registryModels.size > 0 ? [record()] : []),
+      get: () => record(),
+      add: vi.fn(
+        (entry: { info: Record<string, unknown>; models: Array<Record<string, unknown>> }) => {
+          registryModels = new Map(
+            entry.models.map((model) => [String(model.id), model as Record<string, unknown>]),
+          )
+        },
+      ),
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: {
+        set: vi.fn((_id: string, models: Array<Record<string, unknown>>) => {
+          registryModels = new Map(
+            models.map((model) => [String(model.id), model as Record<string, unknown>]),
+          )
+        }),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
+    }
+    let providerTransform: ((editor: unknown) => void) | undefined
+    const reload = vi.fn(async () => {
+      providerTransform?.(editor)
+    })
+    let releaseProviderUpdated!: () => void
+    let releaseSessionCreated!: () => void
+    const providerUpdatedGate = new Promise<void>((resolve) => {
+      releaseProviderUpdated = resolve
+    })
+    const sessionCreatedGate = new Promise<void>((resolve) => {
+      releaseSessionCreated = resolve
+    })
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.19', channel: 'stable' },
+      options: { modelNameTemplate: fallbackTemplate },
+      provider: {
+        list: providerList,
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          providerTransform = transform
+          transform(editor)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload,
+      },
+      event: {
+        subscribe: () =>
+          (async function* () {
+            await providerUpdatedGate
+            yield { type: 'provider.updated' }
+            await sessionCreatedGate
+            yield { type: 'session.created' }
+          })(),
+      },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    // The fallback published two models rendered with the fallback's naming:
+    // no configured provider name, so `{provider_name}` resolved to 'litellm'.
+    expect([...registryModels.keys()]).toEqual(['company/chat', 'fallback-only-model'])
+    expect((registryModels.get('company/chat') as Record<string, unknown>).name).toBe(
+      'Chat via litellm',
+    )
+
+    // The configured provider's inventory no longer serves the fallback-only
+    // model — the replacement must be able to drop it too.
+    inventory = ['company/chat', 'configured-only-model']
+    releaseProviderUpdated()
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce())
+
+    // The configured provider must take the shared id over and re-render it
+    // with its own name ('Team A Gateway'), not keep the fallback's stale
+    // entry; the dropped id must leave with it; the new id must arrive.
+    const byId = Object.fromEntries([...registryModels.values()].map((m) => [String(m.id), m]))
+    expect(Object.keys(byId).sort()).toEqual(['company/chat', 'configured-only-model'])
+    expect((byId['company/chat'] as Record<string, unknown>).name).toBe('Chat via Team A Gateway')
+    expect((byId['configured-only-model'] as Record<string, unknown>).name).toBe(
+      'Configured Only Model via Team A Gateway',
+    )
+
+    // Ownership follow-through: the takeover must have re-owned the shared
+    // id, so a later refresh that no longer discovers it can drop it —
+    // impossible before the fix, which lost ownership on the collision.
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60 * 1000)
+    inventory = ['configured-only-model']
+    releaseSessionCreated()
+    await vi.waitFor(() =>
+      expect([...registryModels.keys()]).toEqual(['configured-only-model']),
+    )
+    dateNow.mockRestore()
+    await cleanup?.()
+  })
+
+  it('preserves curated models when a configured provider replaces the fallback', async () => {
+    // The other half of the CodeRabbit finding: the user may have curated a
+    // model under the same id the fallback generated. Simply replacing every
+    // "owned" match would clobber it, while provenance snapshots keep the
+    // user's content and release the id so a later refresh cannot remove it.
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-provenance-curated-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    process.env.LITELLM_BASE_URL = 'http://127.0.0.1:44562/v1'
+
+    const fallbackTemplate = '{name} via {provider_name}'
+    let inventory = ['company/chat', 'fallback-only-model']
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 })
+      }
+      return new Response(
+        JSON.stringify({ data: inventory.map((id) => ({ id, object: 'model' })) }),
+        { status: 200 },
+      )
+    })
+
+    let providerListCalls = 0
+    const configuredProvider = {
+      id: 'litellm',
+      name: 'Team A Gateway',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      settings: {
+        baseURL: 'http://127.0.0.1:44563/v1',
+        modelNameTemplate: fallbackTemplate,
+      },
+      headers: {},
+    }
+    const providerList = vi.fn(async () => {
+      providerListCalls += 1
+      return { data: providerListCalls <= 2 ? [] : [configuredProvider] }
+    })
+
+    // Between the fallback's publication and the configured provider's
+    // arrival, the user curates 'company/chat' — the host serves it under the
+    // same id with hand-written content the fallback never generated.
+    const curatedEntry = { id: 'company/chat', name: 'Hand-Picked Chat', enabled: true }
+    let registryModels = new Map<string, Record<string, unknown>>()
+    const record = () =>
+      registryModels.size > 0 ? { provider: configuredProvider, models: registryModels } : undefined
+    const editor = {
+      list: () => (registryModels.size > 0 ? [record()] : []),
+      get: () => record(),
+      add: vi.fn(
+        (entry: { info: Record<string, unknown>; models: Array<Record<string, unknown>> }) => {
+          registryModels = new Map(
+            entry.models.map((model) => [String(model.id), model as Record<string, unknown>]),
+          )
+        },
+      ),
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: {
+        set: vi.fn((_id: string, models: Array<Record<string, unknown>>) => {
+          registryModels = new Map(
+            models.map((model) => [String(model.id), model as Record<string, unknown>]),
+          )
+        }),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
+    }
+    let providerTransform: ((editor: unknown) => void) | undefined
+    const reload = vi.fn(async () => {
+      providerTransform?.(editor)
+    })
+    let releaseProviderUpdated!: () => void
+    let releaseSessionCreated!: () => void
+    const providerUpdatedGate = new Promise<void>((resolve) => {
+      releaseProviderUpdated = resolve
+    })
+    const sessionCreatedGate = new Promise<void>((resolve) => {
+      releaseSessionCreated = resolve
+    })
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.19', channel: 'stable' },
+      options: { modelNameTemplate: fallbackTemplate },
+      provider: {
+        list: providerList,
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          providerTransform = transform
+          transform(editor)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload,
+      },
+      event: {
+        subscribe: () =>
+          (async function* () {
+            await providerUpdatedGate
+            yield { type: 'provider.updated' }
+            await sessionCreatedGate
+            yield { type: 'session.created' }
+          })(),
+      },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+    expect([...registryModels.keys()]).toEqual(['company/chat', 'fallback-only-model'])
+
+    // The user curates the shared id (and keeps the fallback-only model as
+    // published — only 'company/chat' is touched).
+    registryModels.set('company/chat', curatedEntry as Record<string, unknown>)
+
+    inventory = ['company/chat']
+    releaseProviderUpdated()
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce())
+
+    // The curated entry survives the takeover unchanged (same object).
+    expect(registryModels.get('company/chat')).toBe(curatedEntry)
+    // …and the plugin's own untouched fallback output is dropped (no longer
+    // served by the configured gateway) rather than lingering forever.
+    expect([...registryModels.keys()]).toEqual(['company/chat'])
+
+    // The takeover must also have RELEASED the curated id: a later refresh
+    // whose inventory omits it must never remove the user's entry.
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60 * 1000)
+    inventory = ['another-model']
+    releaseSessionCreated()
+    await vi.waitFor(() => expect([...registryModels.keys()]).toContain('another-model'))
+    expect(registryModels.get('company/chat')).toBe(curatedEntry)
+    dateNow.mockRestore()
+    await cleanup?.()
+  })
+
+  it('keeps provenance for entries kept through a changed-content refresh', async () => {
+    // Lifecycle regression (follow-up to the CodeRabbit finding): a refresh
+    // whose model info changed keeps the old owned live entry (steady-state
+    // merge semantics), so the provenance record must snapshot the LAST
+    // PUBLISHED entry, not compare against the fresh discovery. Comparing
+    // against fresh discovery dropped provenance for exactly the entries the
+    // merge kept, and a later replacement of the provider could then neither
+    // refresh nor drop the plugin's own stale entry.
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-provenance-refresh-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    process.env.LITELLM_BASE_URL = 'http://127.0.0.1:44564/v1'
+
+    const template = '{name} via {provider_name}'
+    let contextLimit = 8192
+    let inventory = ['company/chat']
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                model_name: 'company/chat',
+                model_info: {
+                  key: 'company/chat',
+                  mode: 'chat',
+                  max_input_tokens: contextLimit,
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({ data: inventory.map((id) => ({ id, object: 'model' })) }),
+        { status: 200 },
+      )
+    })
+
+    // The host registers the configured provider only after setup, so the
+    // initial source is the env/option fallback (id 'litellm').
+    let providerRegistered = false
+    const configuredProvider = {
+      id: 'litellm',
+      name: 'Team A Gateway',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      settings: {
+        baseURL: 'http://127.0.0.1:44565/v1',
+        modelNameTemplate: template,
+      },
+      headers: {},
+    }
+    const providerList = vi.fn(async () => ({
+      data: providerRegistered ? [configuredProvider] : [],
+    }))
+
+    let registryModels = new Map<string, Record<string, unknown>>()
+    const record = () =>
+      registryModels.size > 0 ? { provider: configuredProvider, models: registryModels } : undefined
+    const editor = {
+      list: () => (registryModels.size > 0 ? [record()] : []),
+      get: () => record(),
+      add: vi.fn(
+        (entry: { info: Record<string, unknown>; models: Array<Record<string, unknown>> }) => {
+          registryModels = new Map(
+            entry.models.map((model) => [String(model.id), model as Record<string, unknown>]),
+          )
+        },
+      ),
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: {
+        set: vi.fn((_id: string, models: Array<Record<string, unknown>>) => {
+          registryModels = new Map(
+            models.map((model) => [String(model.id), model as Record<string, unknown>]),
+          )
+        }),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
+    }
+    let providerTransform: ((editor: unknown) => void) | undefined
+    const reload = vi.fn(async () => {
+      providerTransform?.(editor)
+    })
+    let releaseSessionCreated!: () => void
+    let releaseProviderUpdated!: () => void
+    const sessionCreatedGate = new Promise<void>((resolve) => {
+      releaseSessionCreated = resolve
+    })
+    const providerUpdatedGate = new Promise<void>((resolve) => {
+      releaseProviderUpdated = resolve
+    })
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.19', channel: 'stable' },
+      options: { modelNameTemplate: template },
+      provider: {
+        list: providerList,
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          providerTransform = transform
+          transform(editor)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload,
+      },
+      event: {
+        subscribe: () =>
+          (async function* () {
+            await sessionCreatedGate
+            yield { type: 'session.created' }
+            await providerUpdatedGate
+            yield { type: 'provider.updated' }
+          })(),
+      },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    // Phase 1: the fallback published the model with limit 8192 and the
+    // fallback's unnamed-provider label ('litellm').
+    expect([...registryModels.keys()]).toEqual(['company/chat'])
+    expect(registryModels.get('company/chat')).toMatchObject({
+      name: 'Chat via litellm',
+      limit: { context: 8192 },
+    })
+
+    // Phase 2: a refresh with CHANGED model info. The merge keeps the old
+    // live entry (steady-state semantics - a kept owned id retains its live
+    // content); the assertion is that it stays kept, and that provenance for
+    // it survives, which phase 3 proves.
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60 * 1000)
+    contextLimit = 65536
+    releaseSessionCreated()
+    // The refresh has run once the cache has been re-saved with the new
+    // info (discovery always re-persists, kept entries or not).
+    const refreshedCacheKey = buildCacheKey('litellm', 'http://127.0.0.1:44564', {}, {}, { modelNameTemplate: template, providerName: 'litellm' })
+    const savedBefore = readModelCacheSavedAt(refreshedCacheKey)
+    await vi.waitFor(() => {
+      const savedAfter = readModelCacheSavedAt(refreshedCacheKey)
+      expect(savedAfter).not.toBe(savedBefore)
+    })
+    // Kept entry: still the old content.
+    expect(registryModels.get('company/chat')).toMatchObject({
+      name: 'Chat via litellm',
+      limit: { context: 8192 },
+    })
+    dateNow.mockRestore()
+
+    // Phase 3: the configured provider replaces the fallback. Provenance
+    // must have survived phase 2: the takeover re-renders the entry with the
+    // configured provider's label and fresh info.
+    providerRegistered = true
+    releaseProviderUpdated()
+    await vi.waitFor(() => {
+      expect(registryModels.get('company/chat')).toMatchObject({
+        name: 'Chat via Team A Gateway',
+        limit: { context: 65536 },
+      })
+    })
+    await cleanup?.()
+  })
+
+
+  it('never deletes user content for owned ids without provenance evidence', async () => {
+    // Lifecycle regression (follow-up to the CodeRabbit finding): owned ids
+    // can outlive their provenance snapshot (a changed-content refresh drops
+    // the id from a record that compares against fresh discovery, and the
+    // dialog replacement path carries owned ids along). An undiscovered
+    // owned id used to be deleted unconditionally, clobbering a user-curated
+    // entry under it; the deletion must require a snapshot match instead,
+    // keeping the entry and releasing the id.
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-provenance-evidence-test-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    const baseURL = 'http://127.0.0.1:44567'
+    process.env.LITELLM_BASE_URL = `${baseURL}/v1`
+
+    let contextLimit = 8192
+    let inventory = ['shared-id', 'discovered-model']
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                model_name: 'shared-id',
+                model_info: { key: 'shared-id', mode: 'chat', max_input_tokens: contextLimit },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({ data: inventory.map((id) => ({ id, object: 'model' })) }),
+        { status: 200 },
+      )
+    })
+
+    // The initial source is the keyless env fallback (id 'litellm'); the
+    // credential saved later rebuilds it through the dialog path.
+    const configuredProvider = {
+      id: 'litellm',
+      name: 'Configured LiteLLM',
+      activation: 'enabled',
+      package: '@opencode/ai/providers/openai-compatible',
+      settings: {},
+      headers: {},
+    }
+    let registryModels = new Map<string, Record<string, unknown>>()
+    const record = () =>
+      registryModels.size > 0 ? { provider: configuredProvider, models: registryModels } : undefined
+    const editor = {
+      list: () => (registryModels.size > 0 ? [record()] : []),
+      get: () => record(),
+      add: vi.fn(
+        (entry: { info: Record<string, unknown>; models: Array<Record<string, unknown>> }) => {
+          registryModels = new Map(
+            entry.models.map((model) => [String(model.id), model as Record<string, unknown>]),
+          )
+        },
+      ),
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: {
+        set: vi.fn((_id: string, models: Array<Record<string, unknown>>) => {
+          registryModels = new Map(
+            models.map((model) => [String(model.id), model as Record<string, unknown>]),
+          )
+        }),
+        update: vi.fn(),
+        remove: vi.fn(),
+      },
+    }
+    let providerTransform: ((editor: unknown) => void) | undefined
+    const reload = vi.fn(async () => {
+      providerTransform?.(editor)
+    })
+    let releaseSession!: () => void
+    let releaseSwitch!: () => void
+    let releaseSecondSession!: () => void
+    const sessionGate = new Promise<void>((resolve) => {
+      releaseSession = resolve
+    })
+    const switchGate = new Promise<void>((resolve) => {
+      releaseSwitch = resolve
+    })
+    const secondSessionGate = new Promise<void>((resolve) => {
+      releaseSecondSession = resolve
+    })
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.19', channel: 'stable' },
+      options: {},
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          providerTransform = transform
+          transform(editor)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload,
+      },
+      integration: {
+        connection: {
+          // No credential at setup; the user saves one later.
+          active: vi
+            .fn()
+            .mockResolvedValueOnce(undefined)
+            .mockImplementation(async () => ({ key: 'switched-key' })),
+          resolve: vi.fn(async (connection: { key: string }) => ({
+            type: 'key',
+            key: connection.key,
+          })),
+        },
+      },
+      event: {
+        subscribe: () =>
+          (async function* () {
+            await sessionGate
+            yield { type: 'session.created' }
+            await switchGate
+            yield {
+              type: 'credential.switched',
+              data: { integrationID: 'litellm' },
+            }
+            await secondSessionGate
+            yield { type: 'session.created' }
+          })(),
+      },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+    expect([...registryModels.keys()].sort()).toEqual(['discovered-model', 'shared-id'])
+
+    // Phase 1: a refresh with changed model info. The merge keeps the old
+    // live entry; a provenance record comparing against fresh discovery
+    // would drop the id here (the kept entry no longer matches discovery).
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60 * 1000)
+    contextLimit = 65536
+    releaseSession()
+    // The refresh has run once the fallback's cache was re-saved.
+    const fallbackCacheKey = buildCacheKey('litellm', baseURL, {}, {})
+    const savedBefore = readModelCacheSavedAt(fallbackCacheKey)
+    await vi.waitFor(() => {
+      expect(readModelCacheSavedAt(fallbackCacheKey)).not.toBe(savedBefore)
+    })
+    dateNow.mockRestore()
+
+    // Phase 2: the user curates 'shared-id' (an id the plugin owns), and the
+    // gateway's new inventory (served under the saved credential) omits
+    // both previously discovered ids.
+    const curatedEntry = { id: 'shared-id', name: 'Hand-Picked', enabled: true }
+    registryModels.set('shared-id', curatedEntry as Record<string, unknown>)
+    inventory = ['unrelated-model']
+
+    // Phase 3: the first saved credential rebuilds the source through the
+    // dialog path. Owned ids carry over; the takeover must keep the curated
+    // entry (its live content matches no published snapshot) while dropping
+    // the plugin's own untouched 'discovered-model' output.
+    releaseSwitch()
+    const registeredLog = vi.spyOn(console, 'log')
+    await vi.waitFor(() =>
+      expect(registeredLog.mock.calls.some((call) => String(call[0]).includes('Registered provider "litellm" from the connected LiteLLM credential'))).toBe(true),
+    )
+    // The curated entry survives the rebuild - same object, not re-rendered.
+    expect(registryModels.get('shared-id')).toBe(curatedEntry)
+    expect([...registryModels.keys()].sort()).toEqual(['shared-id', 'unrelated-model'])
+
+    // Phase 4: the rebuild must also have RELEASED the curated id: a later
+    // refresh whose inventory omits it cannot remove the user's entry. Age
+    // the credential's cache so the refresh actually re-discovers.
+    const switchedCacheKey = buildCacheKey('litellm', baseURL, {}, {}, {}, 'switched-key')
+    const dateNow2 = vi.spyOn(Date, 'now').mockReturnValue(Date.now() - 10 * 60 * 1000)
+    writeModelCache(switchedCacheKey, { 'unrelated-model': { name: 'Unrelated Model' } })
+    dateNow2.mockRestore()
+    inventory = ['unrelated-model', 'another-model']
+    // The session refresh re-runs the merge with the released id.
+    releaseSecondSession()
+    await vi.waitFor(() => expect([...registryModels.keys()]).toContain('another-model'))
+    expect(registryModels.get('shared-id')).toBe(curatedEntry)
+    expect([...registryModels.keys()].sort()).toEqual([
+      'another-model',
+      'shared-id',
+      'unrelated-model',
+    ])
+    await cleanup?.()
+  })
+
+
+
 
   it('retries publishing a newly configured provider after a failed reload', async () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-late-provider-retry-test-'))

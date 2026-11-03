@@ -8,8 +8,11 @@ import {
   normalizeBaseURL,
 } from '../utils/litellm-api'
 import {
+  applyModelNameTemplate,
+  DEFAULT_MODEL_NAME_TEMPLATE,
   formatModelName,
   categorizeModel,
+  type ModelNaming,
 } from '../utils/format-model-name'
 import { requiresResponsesAPI } from '../utils/transport'
 import type { LiteLLMModel, LiteLLMModelInfo } from '../types'
@@ -114,6 +117,8 @@ interface RefreshContext {
   filters: ModelFilters
   capabilities: ModelCapabilities
   formatModelNames: boolean
+  modelNameTemplate?: string
+  providerName: string
   providerId: string
 }
 const refreshContexts = new Map<string, RefreshContext>()
@@ -232,6 +237,20 @@ export function readFormatModelNames(options: Record<string, unknown>): boolean 
 }
 
 /**
+ * Read the optional display-name template. Non-strings are ignored. An empty
+ * string, or the `"{name}"` default spelled out, counts as unset so those
+ * configs keep the same cache identity (and the same warm cache) as before
+ * the setting existed.
+ */
+export function readModelNameTemplate(options: Record<string, unknown>): string | undefined {
+  const value = options.modelNameTemplate
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (trimmed === '' || trimmed === DEFAULT_MODEL_NAME_TEMPLATE) return undefined
+  return value
+}
+
+/**
  * Overlay metadata onto a `/v1/models` entry in three tiers: the entry's
  * own fields win, `/v1/model/info` fills gaps (notably `mode`, which
  * `/v1/models` omits for database-defined models), and finally
@@ -277,26 +296,43 @@ function enrichModel(
 const USD_PER_TOKEN_TO_PER_MILLION = 1_000_000
 
 /**
+ * The display name a model gets before any provider template is applied —
+ * the plugin's default formatting, or the raw `/v1/models` id.
+ */
+function baseDisplayName(model: { id: string }, formatModelNames: boolean): string {
+  return formatModelNames ? formatModelName(model) : model.id
+}
+
+/**
  * Convert a discovered LiteLLM model into an OpenCode config-level
  * model entry (the shape used in `provider.*.models` inside
  * `opencode.json`). Returns `null` for non-chat models (embedding,
  * image, audio) — they can't be used as primary chat models and would
  * clutter the picker.
  *
- * Exported for tests: `formatModelNames` decides whether the display
- * name is the prettified id or the raw `/v1/models` id verbatim.
+ * Exported for tests: the `naming` options decide the display name — the
+ * prettified id or the raw `/v1/models` id, optionally wrapped in the
+ * provider's `modelNameTemplate`.
  */
 export function toConfigModel(
   model: LiteLLMModel,
   info?: LiteLLMModelInfo,
-  formatModelNames = true,
+  naming: ModelNaming = {},
 ): Record<string, unknown> | null {
   const type = categorizeModel(model)
   if (type === 'embedding' || type === 'image' || type === 'audio') {
     return null
   }
+  const providerId = naming.providerId ?? ''
   const entry: Record<string, unknown> = {
-    name: formatModelNames ? formatModelName(model) : model.id,
+    name: applyModelNameTemplate(naming.modelNameTemplate, {
+      name: baseDisplayName(model, naming.formatModelNames !== false),
+      id: model.id,
+      providerId,
+      // Without a configured display name the picker falls back to the id,
+      // so the placeholder resolves to the same thing the user sees.
+      providerName: naming.providerName ?? providerId,
+    }),
   }
   // Some deployments only report the OpenAI-style `max_tokens` total;
   // use it as the context limit when `max_input_tokens` is absent.
@@ -389,9 +425,9 @@ export interface DiscoveredModels {
  * classifies + formats each model, and returns the built entries plus the
  * ids that require the Responses API and per-model hints. The provider's
  * `includeModels`/`excludeModels` filters, `modelCapabilities` overrides and
- * `formatModelNames` choice are applied here (not at merge time) so every
- * path that persists or serves a cache — cold discovery and background
- * refresh — writes the same adjusted view.
+ * naming choices (`formatModelNames`, `modelNameTemplate`) are applied here
+ * (not at merge time) so every path that persists or serves a cache — cold
+ * discovery and background refresh — writes the same adjusted view.
  *
  * Returns `null` when the proxy is unreachable/unauthorized or exposes
  * no models, so callers can distinguish "no data" from "empty result".
@@ -403,7 +439,7 @@ export async function discoverModels(
   providerId: string,
   filters: ModelFilters = {},
   capabilities: ModelCapabilities = {},
-  formatModelNames = true,
+  naming: ModelNaming = {},
 ): Promise<DiscoveredModels | null> {
   if (!(await checkLiteLLMHealth(baseURL, apiKey, customHeaders))) {
     log(
@@ -478,7 +514,7 @@ export async function discoverModels(
     const info = infoByName?.get(model.id)
     if (infoByName && !info) unmatched.push(model.id)
     const enriched = enrichModel(model, info, capabilities[model.id])
-    const entry = toConfigModel(enriched, info, formatModelNames)
+    const entry = toConfigModel(enriched, info, { ...naming, providerId })
     if (!entry) {
       skipped++
       continue
@@ -573,10 +609,14 @@ function ensureResponsesProvider(
   const provider = config.provider[id] as Record<string, unknown>
   if (!provider.npm) provider.npm = RESPONSES_NPM
   if (typeof provider.name !== 'string' || !provider.name) {
+    // Mirror how the base provider is labelled: its configured name, or its
+    // id when none is set (which is what the picker falls back to). This keeps
+    // `{provider_name}` in the sibling's model names equal to the sibling's
+    // visible label.
     const baseName =
       typeof baseProvider.name === 'string' && baseProvider.name
         ? baseProvider.name
-        : 'LiteLLM (proxy)'
+        : baseProviderId
     provider.name = `${baseName} Responses`
   }
   if (!provider.options || typeof provider.options !== 'object') {
@@ -627,6 +667,35 @@ function readHeaderMap(value: unknown): Record<string, string> {
 }
 
 /**
+ * Re-render one discovered entry's name for the provider it is about to be
+ * injected into.
+ *
+ * OpenCode 1 moves Responses models into a `${baseProviderId}-responses`
+ * sibling, so a template that uses `{provider_id}`/`{provider_name}` must
+ * resolve to the provider the user actually selects. The entry in the cache
+ * stays as discovered — OpenCode 2 reads the same cache with a single
+ * provider — so this returns a copy instead of mutating it.
+ */
+function renameForProvider(
+  entry: Record<string, unknown>,
+  modelId: string,
+  naming: ModelNaming,
+  providerId: string,
+  providerName: string,
+): Record<string, unknown> {
+  if (naming.modelNameTemplate === undefined) return entry
+  return {
+    ...entry,
+    name: applyModelNameTemplate(naming.modelNameTemplate, {
+      name: baseDisplayName({ id: modelId }, naming.formatModelNames !== false),
+      id: modelId,
+      providerId,
+      providerName,
+    }),
+  }
+}
+
+/**
  * Split freshly discovered entries into the chat provider and the Responses
  * sibling, injecting each side without clobbering curated entries. Returns
  * every id this call added, across both providers, so the config hook's
@@ -642,27 +711,38 @@ function injectDiscoveredModels(
   baseURL: string,
   apiKey: string | undefined,
   customHeaders: Record<string, string> | undefined,
-  runtimeFetch?: typeof fetch,
+  runtimeFetch: typeof fetch | undefined,
+  naming: ModelNaming,
 ): string[] {
   const responsesSet = new Set(responsesIds)
-  const existingSibling = config.provider[`${baseProviderId}${RESPONSES_PROVIDER_SUFFIX}`]
+  const responsesProviderId = `${baseProviderId}${RESPONSES_PROVIDER_SUFFIX}`
+  const existingSibling =
+    config.provider[responsesProviderId] &&
+    typeof config.provider[responsesProviderId] === 'object'
+      ? (config.provider[responsesProviderId] as Record<string, unknown>)
+      : undefined
+  // A name the user (or an earlier run) already gave the sibling, captured
+  // before `ensureResponsesProvider` generates one.
+  const configuredSiblingName =
+    typeof existingSibling?.name === 'string' && existingSibling.name
+      ? existingSibling.name
+      : undefined
   const siblingModelsExisting: Record<string, unknown> =
     existingSibling &&
-    typeof existingSibling === 'object' &&
-    (existingSibling as Record<string, unknown>).models &&
-    typeof (existingSibling as Record<string, unknown>).models === 'object'
-      ? ((existingSibling as Record<string, unknown>).models as Record<string, unknown>)
+    existingSibling.models &&
+    typeof existingSibling.models === 'object'
+      ? (existingSibling.models as Record<string, unknown>)
       : {}
 
   const chatEntries: Record<string, unknown> = {}
-  const responsesEntries: Record<string, unknown> = {}
+  const responsesIdsToInject: string[] = []
   for (const [id, entry] of Object.entries(entries)) {
     // A model already present under the other provider was curated there (or
     // injected by an earlier run); leave it alone instead of duplicating it
     // across both providers.
     if (responsesSet.has(id)) {
       if (Object.hasOwn(baseModels, id)) continue
-      responsesEntries[id] = entry
+      responsesIdsToInject.push(id)
     } else {
       if (Object.hasOwn(siblingModelsExisting, id)) continue
       chatEntries[id] = entry
@@ -670,7 +750,7 @@ function injectDiscoveredModels(
   }
 
   const added = mergeModels(baseModels, chatEntries)
-  if (Object.keys(responsesEntries).length > 0) {
+  if (responsesIdsToInject.length > 0) {
     const siblingModels = ensureResponsesProvider(
       config,
       baseProviderId,
@@ -680,6 +760,26 @@ function injectDiscoveredModels(
       customHeaders,
       runtimeFetch,
     )
+    // The sibling generates its name from the base provider's, so read it
+    // back; a user-configured name (from this run or an earlier one) wins.
+    // `{provider_name}` must equal the label the picker shows for the sibling
+    // because that is the provider the model is selected through.
+    const sibling = config.provider[responsesProviderId] as Record<string, unknown> | undefined
+    const siblingName =
+      configuredSiblingName ??
+      (sibling && typeof sibling.name === 'string' && sibling.name
+        ? sibling.name
+        : responsesProviderId)
+    const responsesEntries: Record<string, unknown> = {}
+    for (const id of responsesIdsToInject) {
+      responsesEntries[id] = renameForProvider(
+        entries[id] as Record<string, unknown>,
+        id,
+        naming,
+        responsesProviderId,
+        siblingName,
+      )
+    }
     added.push(...mergeModels(siblingModels, responsesEntries))
   }
   return added
@@ -712,7 +812,12 @@ async function backgroundRefresh(cacheKey: string): Promise<void> {
         ctx.providerId,
         ctx.filters,
         ctx.capabilities,
-        ctx.formatModelNames,
+        {
+          formatModelNames: ctx.formatModelNames,
+          modelNameTemplate: ctx.modelNameTemplate,
+          providerId: ctx.providerId,
+          providerName: ctx.providerName,
+        },
       ),
       DISCOVERY_TIMEOUT_MS,
     )
@@ -870,6 +975,12 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         const filters = readModelFilters(options)
         const capabilities = parseModelCapabilities(options.modelCapabilities)
         const formatModelNames = readFormatModelNames(options)
+        const modelNameTemplate = readModelNameTemplate(options)
+        // `{provider_name}` resolves to what the picker labels the provider
+        // with; OpenCode falls back to the id when no name is configured.
+        const providerName =
+          typeof provider.name === 'string' && provider.name ? provider.name : providerId
+        const naming = { formatModelNames, modelNameTemplate, providerId, providerName }
 
         // Resolve base URL
         let baseURL: string | null = null
@@ -944,6 +1055,8 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
         // the provider keeps its models and can be reconnected from `/connect`.
         const cacheKey = buildCacheKey(providerId, baseURL, filters, capabilities, {
           formatModelNames,
+          modelNameTemplate,
+          providerName,
         }, sso ? ssoIdentity(sso) : apiKey)
 
         // Remember how to reach this proxy so the `event` hook can
@@ -960,6 +1073,8 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
           filters,
           capabilities,
           formatModelNames,
+          modelNameTemplate,
+          providerName,
           providerId,
         })
 
@@ -1006,6 +1121,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
             runtimeKey,
             customHeaders,
             runtimeFetch,
+            naming,
           )
           injectedModelIds.set(cacheKey, new Set(added))
           log(
@@ -1026,7 +1142,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
             providerId,
             filters,
             capabilities,
-            formatModelNames,
+            { formatModelNames, modelNameTemplate, providerId, providerName },
           ),
           DISCOVERY_TIMEOUT_MS,
         )
@@ -1042,6 +1158,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
             runtimeKey,
             customHeaders,
             runtimeFetch,
+            naming,
           )
           injectedModelIds.set(cacheKey, new Set(added))
           writeModelCache(cacheKey, discovered.models, discovered.responsesIds, discovered.hints)

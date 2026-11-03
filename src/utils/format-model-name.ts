@@ -140,7 +140,7 @@ export function categorizeModel(model: LiteLLMModel): 'chat' | 'embedding' | 'im
  *   "litellm/kimi-k2.5"                   -> "Kimi K2.5"
  *   "litellm/minimax-m2.5"                -> "MiniMax M2.5"
  */
-export function formatModelName(model: LiteLLMModel): string {
+export function formatModelName(model: Pick<LiteLLMModel, 'id'>): string {
   const { id } = model
 
   // Drop provider prefix when present, but only the FIRST segment, so
@@ -195,4 +195,57 @@ export function formatModelName(model: LiteLLMModel): string {
   })
 
   return tokens.join(' ') || id
+}
+
+/**
+ * The naming choices that decide how a discovered model is displayed. They
+ * are baked into cached model entries, so the same object also feeds the
+ * cache identity (see `buildCacheKey` in `model-cache.ts`).
+ */
+export interface ModelNaming {
+  /** Prettify a model id into a display name; `false` keeps the raw id. */
+  formatModelNames?: boolean
+  /**
+   * Template applied to every discovered model's display name. Unset (or
+   * `"{name}"`) leaves today's names untouched. Known placeholders:
+   * `{name}`, `{id}`, `{provider_id}` and `{provider_name}`.
+   */
+  modelNameTemplate?: string
+  /** Provider id/name used by the template's provider placeholders. */
+  providerId?: string
+  providerName?: string
+}
+
+/** The template that reproduces today's names, so it counts as "unset". */
+export const DEFAULT_MODEL_NAME_TEMPLATE = '{name}'
+
+const NAME_TEMPLATE_PLACEHOLDER = /\{(name|id|provider_id|provider_name)\}/g
+
+/**
+ * Fill a `modelNameTemplate` with one model's values.
+ *
+ * Substitution is single-pass, so a value that itself contains a placeholder
+ * (`{id}` inside a display name, say) is inserted literally rather than
+ * expanded again. Unknown placeholders stay as written, which makes a typo
+ * visible in the picker instead of silently dropping the model's name.
+ */
+export function applyModelNameTemplate(
+  template: string | undefined,
+  values: { name: string; id: string; providerId: string; providerName: string },
+): string {
+  if (template === undefined || template.trim() === '') return values.name
+  return template.replace(NAME_TEMPLATE_PLACEHOLDER, (placeholder: string, key: string) => {
+    switch (key) {
+      case 'name':
+        return values.name
+      case 'id':
+        return values.id
+      case 'provider_id':
+        return values.providerId
+      case 'provider_name':
+        return values.providerName
+      default:
+        return placeholder
+    }
+  })
 }
