@@ -1,0 +1,19 @@
+test/auth-v1.test.ts
+  s_a41ce6d780063f::t_4e84b4907de028 622,641-643,646-651,654-656
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "b4e8f0ff21694e6426d2beb96130a2ecf3d1f4f0",
+  "prompts": {},
+  "sessions": {
+    "s_a41ce6d780063f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e5f5949e4ffeL7s6k3ySAONKVd",
+        "model": "unknown"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
