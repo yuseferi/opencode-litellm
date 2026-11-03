@@ -1,0 +1,93 @@
+test/plugin-v2.test.ts
+  s_69b316747c10bd::t_e8de6eb4cebc2d 904-936,938-962,964-981,987-1002
+  s_69b316747c10bd::t_012520e606d08f 1064-1065
+  s_69b316747c10bd::t_7d2a8fb74a63de 982-986
+  s_69b316747c10bd::t_f81f98cbe561de 937,963
+  s_69b316747c10bd::t_f1b38f30310b6c 1063
+  s_69b316747c10bd::t_5ff92a4e870a0c 1003-1062,1066-1069
+README.md
+  s_69b316747c10bd::t_098b0cc56e0740 495-535,537-539
+  s_69b316747c10bd::t_391804f2329cd4 536
+test/to-config-model.test.ts
+  s_69b316747c10bd::t_8dbfe4c6dfefb0 58-59,61-132
+  s_69b316747c10bd::t_5cf20fae033c1e 2
+  s_69b316747c10bd::t_52b9f877f7e8dc 14,18,25,47,56-57
+  s_69b316747c10bd::t_85ad5995fbd274 60
+test/plugin-v1.test.ts
+  s_69b316747c10bd::t_33f7f5f5296d32 115-194
+  s_69b316747c10bd::t_1c8376057d221c 195-233
+  s_69b316747c10bd::t_d70b741b82d908 234-265
+src/utils/model-cache.ts
+  s_69b316747c10bd::t_be28534892542d 5
+  s_69b316747c10bd::t_8c757a20b2abab 102-111,118,130,135-136,138-147,154
+src/utils/format-model-name.ts
+  s_69b316747c10bd::t_92a1c46beb1144 199-251
+  s_69b316747c10bd::t_89f212ae7cafe9 143
+test/model-cache.test.ts
+  s_69b316747c10bd::t_f621aa596346df 233-262
+CHANGELOG.md
+  s_69b316747c10bd::t_f4c9becc66b704 1-5,13
+src/plugin/index.ts
+  s_69b316747c10bd::t_92de7322a211fd 981-982
+  s_69b316747c10bd::t_f17fd8632e3acd 120-121
+  s_69b316747c10bd::t_7936eb457da30d 815-820
+  s_69b316747c10bd::t_34014001466d70 517
+  s_69b316747c10bd::t_9cec224135342b 240-252
+  s_69b316747c10bd::t_fb23ab2bd6cb84 978-980
+  s_69b316747c10bd::t_d2346e7322b3fb 1145
+  s_69b316747c10bd::t_a0ac74e1cb52c5 1076-1077
+  s_69b316747c10bd::t_3642fae6998ccc 11-12,15
+  s_69b316747c10bd::t_4ac772166d94fa 428-430,442
+  s_69b316747c10bd::t_3749c2c90d173b 313-315,320,326,328,330-335
+  s_69b316747c10bd::t_9287b66f482c57 239
+  s_a41ce6d780063f::t_7220008d80037b 1058-1059
+  s_69b316747c10bd::t_bef098e39eeb02 669
+  s_a41ce6d780063f::t_2acb9ff7b5d36d 714
+  s_69b316747c10bd::t_aaa2bf306ac32e 983
+  s_69b316747c10bd::t_486db47995bb89 764-766,770-772
+  s_69b316747c10bd::t_3c6c953d8e9d1c 299-305
+  s_69b316747c10bd::t_8d781a1b1a4ca6 1124
+  s_69b316747c10bd::t_3d5db793ed3437 1161
+  s_69b316747c10bd::t_41c07f5b70c440 670-697,715,718,738,745,753,767,773-775,777-782
+  s_69b316747c10bd::t_e67464944e628f 763,768-769
+  s_69b316747c10bd::t_965bb0ff30a302 612-615,619
+  s_69b316747c10bd::t_19515983ca8c94 329
+  s_69b316747c10bd::t_0164838ba4d74b 724-726,729
+  s_69b316747c10bd::t_16910022c25d6b 719-723,727-728,732-734
+  s_69b316747c10bd::t_1978cd2f9272b3 298
+  s_69b316747c10bd::t_e231f923e8fa0b 776
+src/plugin/v2.ts
+  s_69b316747c10bd::t_765d6c202d6fa1 501-502
+  s_69b316747c10bd::t_6db2bc5223bd52 12
+  s_69b316747c10bd::t_4ed9aab7bbad87 313
+  s_69b316747c10bd::t_126a5feac8e701 460
+  s_69b316747c10bd::t_1b4c6fa151be65 113-114
+  s_69b316747c10bd::t_2200e0f591d2b5 416,421
+  s_69b316747c10bd::t_c5bd5507385c44 562-567
+  s_a41ce6d780063f::t_337d1d428b1628 445
+  s_69b316747c10bd::t_f352918100c796 417-420
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "9a9b84d1d3e028ff80621d3188c69e6521ab4c67",
+  "prompts": {},
+  "sessions": {
+    "s_69b316747c10bd": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e69125a45ffebA94Wq57pt1bCb",
+        "model": "unknown"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    },
+    "s_a41ce6d780063f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e5f5949e4ffeL7s6k3ySAONKVd",
+        "model": "unknown"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
