@@ -1,0 +1,59 @@
+test/plugin-v2.test.ts
+  s_69b316747c10bd::t_65a4b8a195865f 962
+  s_69b316747c10bd::t_e8de6eb4cebc2d 904-961,963-998
+README.md
+  s_69b316747c10bd::t_098b0cc56e0740 495-538
+test/to-config-model.test.ts
+  s_69b316747c10bd::t_8dbfe4c6dfefb0 58-59,61-132
+  s_69b316747c10bd::t_5cf20fae033c1e 2
+  s_69b316747c10bd::t_52b9f877f7e8dc 14,18,25,47,56-57
+  s_69b316747c10bd::t_85ad5995fbd274 60
+test/plugin-v1.test.ts
+  s_69b316747c10bd::t_33f7f5f5296d32 115-194
+src/utils/model-cache.ts
+  s_69b316747c10bd::t_be28534892542d 5
+  s_69b316747c10bd::t_8c757a20b2abab 102-111,118,130,135-136,138-147,154
+src/utils/format-model-name.ts
+  s_69b316747c10bd::t_92a1c46beb1144 199-251
+test/model-cache.test.ts
+  s_69b316747c10bd::t_f621aa596346df 216-245
+CHANGELOG.md
+  s_69b316747c10bd::t_f4c9becc66b704 1-6
+src/plugin/index.ts
+  s_69b316747c10bd::t_92de7322a211fd 909-910
+  s_69b316747c10bd::t_f17fd8632e3acd 120-121
+  s_69b316747c10bd::t_7936eb457da30d 743-748
+  s_69b316747c10bd::t_34014001466d70 509
+  s_69b316747c10bd::t_9cec224135342b 240-252
+  s_69b316747c10bd::t_fb23ab2bd6cb84 906-908
+  s_69b316747c10bd::t_d2346e7322b3fb 1071
+  s_69b316747c10bd::t_a0ac74e1cb52c5 1003-1004
+  s_69b316747c10bd::t_3642fae6998ccc 11-12,15
+  s_69b316747c10bd::t_4ac772166d94fa 420-422,434
+  s_69b316747c10bd::t_3749c2c90d173b 305-307,312,318,320-327
+  s_69b316747c10bd::t_9287b66f482c57 239
+src/plugin/v2.ts
+  s_69b316747c10bd::t_765d6c202d6fa1 500-501
+  s_69b316747c10bd::t_6db2bc5223bd52 12
+  s_69b316747c10bd::t_4ed9aab7bbad87 313
+  s_69b316747c10bd::t_126a5feac8e701 459
+  s_69b316747c10bd::t_1b4c6fa151be65 113-114
+  s_69b316747c10bd::t_2200e0f591d2b5 416-420
+  s_69b316747c10bd::t_c5bd5507385c44 561-566
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "6d0ff37b0c6a10ebb6ccdd25484c7b7262359b47",
+  "prompts": {},
+  "sessions": {
+    "s_69b316747c10bd": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e69125a45ffebA94Wq57pt1bCb",
+        "model": "unknown"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    }
+  }
+}
