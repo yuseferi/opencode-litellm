@@ -1,3 +1,10 @@
+# [1.10.0](https://github.com/yuseferi/opencode-litellm/compare/v1.9.0...v1.10.0) (2026-11-03)
+
+
+### Features
+
+* add modelNameTemplate for discovered model display names ([#55](https://github.com/yuseferi/opencode-litellm/issues/55)) ([fbac09e](https://github.com/yuseferi/opencode-litellm/commit/fbac09e601bb7f1da897be97081043a6e5d3e965)), closes [#52](https://github.com/yuseferi/opencode-litellm/issues/52)
+
 ## [Unreleased]
 
 ### Features
