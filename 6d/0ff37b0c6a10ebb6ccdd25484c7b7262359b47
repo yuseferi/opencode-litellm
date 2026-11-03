@@ -32,6 +32,7 @@ src/plugin/index.ts
   s_69b316747c10bd::t_4ac772166d94fa 420-422,434
   s_69b316747c10bd::t_3749c2c90d173b 305-307,312,318,320-327
   s_69b316747c10bd::t_9287b66f482c57 239
+  s_a41ce6d780063f::t_7220008d80037b 985-986
 src/plugin/v2.ts
   s_69b316747c10bd::t_765d6c202d6fa1 500-501
   s_69b316747c10bd::t_6db2bc5223bd52 12
@@ -40,6 +41,7 @@ src/plugin/v2.ts
   s_69b316747c10bd::t_1b4c6fa151be65 113-114
   s_69b316747c10bd::t_2200e0f591d2b5 416-420
   s_69b316747c10bd::t_c5bd5507385c44 561-566
+  s_a41ce6d780063f::t_337d1d428b1628 444
 ---
 {
   "schema_version": "authorship/3.0.0",
@@ -51,6 +53,14 @@ src/plugin/v2.ts
       "agent_id": {
         "tool": "opencode",
         "id": "ses_e69125a45ffebA94Wq57pt1bCb",
+        "model": "unknown"
+      },
+      "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
+    },
+    "s_a41ce6d780063f": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_e5f5949e4ffeL7s6k3ySAONKVd",
         "model": "unknown"
       },
       "human_author": "Yusef Mohamadi <yuseferi@gmail.com>"
