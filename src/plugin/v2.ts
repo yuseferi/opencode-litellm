@@ -14,9 +14,11 @@ import {
 } from './index'
 import {
   LITELLM_INTEGRATION_ID,
+  connectionApiKey,
   readConnectedConfig,
   registerLiteLLMIntegration,
   type ConnectedLiteLLM,
+  type SignInTarget,
 } from './integration'
 import {
   buildCacheKey,
@@ -26,6 +28,7 @@ import {
 } from '../utils/model-cache'
 import { normalizeBaseURL, autoDetectLiteLLM } from '../utils/litellm-api'
 import { getOpenCodeStoredApiKey } from '../utils/opencode-auth'
+import { sameProxy } from '../utils/sso'
 import { parseModelCapabilities } from '../utils/model-capabilities'
 import type { ModelCapabilities } from '../utils/model-capabilities'
 import {
@@ -317,6 +320,45 @@ function runtimeSettings(source: ProviderSource): Record<string, unknown> {
   return settings
 }
 
+function providerHeaders(
+  pluginOptions: Record<string, unknown>,
+  settings: Record<string, unknown>,
+  provider: ProviderInfo | undefined,
+): Record<string, string> {
+  return {
+    ...readHeaders(pluginOptions.customHeaders),
+    ...readCustomHeaders(settings),
+    ...readHeaders(provider?.headers),
+  }
+}
+
+/** The proxy URL and headers a sign-in uses: the configured provider's, else the plugin options'. */
+async function signInTarget(
+  context: Context,
+  pluginOptions: Record<string, unknown>,
+  providerID: string,
+): Promise<SignInTarget> {
+  const providers = await listMatchingProviders(context)
+  const provider = providers.find((candidate) => candidate.id === providerID)
+  const settings = { ...pluginOptions, ...asRecord(provider?.settings) }
+  return {
+    baseURL: readString(settings.baseURL),
+    headers: providerHeaders(pluginOptions, settings, provider),
+  }
+}
+
+/**
+ * Whether a sign-in may go to `baseURL`. Its token only goes to the proxy that issued it, as on
+ * OpenCode 1; a sign-in that names no proxy (OIDC) goes where the provider points.
+ */
+function signInReaches(signedInTo: string | undefined, baseURL: string | undefined): boolean {
+  if (!signedInTo || !baseURL || sameProxy(signedInTo, baseURL)) return true
+  logInfo(
+    `[opencode-litellm] Not using the LiteLLM sign-in for ${signedInTo}: ${baseURL} must not receive its token.`,
+  )
+  return false
+}
+
 async function makeProviderSource(
   context: Context,
   provider: ProviderInfo | undefined,
@@ -324,25 +366,25 @@ async function makeProviderSource(
 ): Promise<ProviderSource | null> {
   const providerSettings = asRecord(provider?.settings)
   const settings = { ...pluginOptions, ...providerSettings }
-  const customHeaders = {
-    ...readHeaders(pluginOptions.customHeaders),
-    ...readCustomHeaders(settings),
-    ...readHeaders(provider?.headers),
-  }
+  const customHeaders = providerHeaders(pluginOptions, settings, provider)
+  const configuredBaseURL = readString(settings.baseURL)
   // Credential plus dialog form answers. A provider wired to its own
   // integration keeps using exactly that one; otherwise the plugin's
   // registered integration is consulted, so a gateway can be connected
   // entirely from the web UI with no hand-written config.
-  const connected: ConnectedLiteLLM | undefined = await readConnectedConfig(
+  let connected: ConnectedLiteLLM | undefined = await readConnectedConfig(
     context,
     provider?.integrationID ?? LITELLM_INTEGRATION_ID,
   )
+  // A base URL configured for another proxy turns the sign-in off.
+  if (connected?.credentialID && !signInReaches(connected.baseURL, configuredBaseURL)) {
+    connected = undefined
+  }
   const id =
     provider?.id ??
     readString(pluginOptions.providerID) ??
     connected?.providerID ??
     CHAT_PROVIDER_ID
-  const configuredBaseURL = readString(settings.baseURL)
   const connectedApiKey = connected?.apiKey
   // Precedence rule: an explicit settings/plugin-options apiKey is the
   // operator's deliberate config and stays first; then a credential the user
@@ -373,7 +415,13 @@ async function makeProviderSource(
     ? normalizeBaseURL(configuredBaseURL)
     : connected?.baseURL
       ? normalizeBaseURL(connected.baseURL)
-      : await autoDetectLiteLLM(apiKey, customHeaders)
+      : await autoDetectLiteLLM(
+          apiKey,
+          customHeaders,
+          // A sign-in only goes to a proxy named for it: probing local ports
+          // would hand its token to whatever answers there.
+          usesConnectionCredential && connected?.credentialID ? [] : undefined,
+        )
 
   if (!detectedBaseURL) {
     return null
@@ -382,10 +430,11 @@ async function makeProviderSource(
   const baseURL = normalizeBaseURL(detectedBaseURL)
   // The cache key is isolated by the effective credential (a fingerprint, never
   // the raw key): a credential change starts a fresh discovery instead of
-  // serving another credential's cached model list.
+  // serving another credential's cached model list. A sign-in is keyed by its
+  // credential id, because its access token rotates on every refresh.
   const cacheKey = buildCacheKey(id, baseURL, filters, capabilities, {
     formatModelNames,
-  }, apiKey)
+  }, (usesConnectionCredential ? connected?.credentialID : undefined) ?? apiKey)
   const cacheEntry = readModelCacheEntry(cacheKey)
   let entries = cacheEntry?.models ?? null
   let responsesIds = cacheEntry?.responsesIds ?? []
@@ -477,10 +526,21 @@ async function refreshProviderSource(
     return
   }
 
-  const apiKey = source.apiKey
   let refresh!: Promise<void>
   refresh = (async () => {
     try {
+      // A sign-in's access token rotates; resolving the connection refreshes an
+      // expiring one, so discovery does not run with a token that has expired.
+      if (source.usesConnectionCredential && source.integrationID) {
+        const connected = await readConnectedConfig(context, source.integrationID)
+        if (
+          connected?.apiKey &&
+          (!connected.credentialID || signInReaches(connected.baseURL, source.baseURL))
+        ) {
+          source.apiKey = connected.apiKey
+        }
+      }
+      const apiKey = source.apiKey
       const discovered = await withTimeout(
         discoverModels(
           source.baseURL,
@@ -552,7 +612,15 @@ async function refreshConnectionCredential(
     const credential = connection
       ? await context.integration.connection.resolve(connection)
       : undefined
-    const connectionKey = credential?.type === 'key' ? credential.key : undefined
+    let connectionKey = connectionApiKey(credential)
+    // A new sign-in may be for another proxy than the one this source points to.
+    if (
+      connectionKey !== undefined &&
+      credential?.type === 'oauth' &&
+      !signInReaches(readString(credential.metadata?.baseURL), source.baseURL)
+    ) {
+      connectionKey = undefined
+    }
     const settingsApiKey = readString(source.settings.apiKey)
     let nextKey: string | undefined
     let nextUsesConnection: boolean
@@ -731,7 +799,9 @@ const definition = Plugin.define({
     // Surface LiteLLM in the connect-provider dialog so gateways can be
     // connected from the web UI. Purely additive: a host without the
     // integration API, or a failed registration, keeps every other auth path.
-    const integrationRegistration = await registerLiteLLMIntegration(context)
+    const integrationRegistration = await registerLiteLLMIntegration(context, (providerID) =>
+      signInTarget(context, pluginOptions, providerID),
+    )
 
     // First pass. On OpenCode 2 the host has not registered user-configured
     // providers yet, so this typically finds only built-ins; the event loop
