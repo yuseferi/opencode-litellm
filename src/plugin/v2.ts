@@ -117,9 +117,33 @@ interface ProviderSource {
   /**
    * Model ids this plugin injected into the provider registry (as opposed
    * to ids the user curated in config). Only these are eligible to be
-   * removed when a later refresh no longer discovers them.
+   * removed when a later refresh no longer discovers them — and even then
+   * only while the merge can match the live entry against what the plugin
+   * last published for the id (see mergeProviderModels).
    */
   ownedModelIds: Set<string>
+  /**
+   * Snapshots of the registry entries this plugin last published for the
+   * ids in {@link ownedModelIds}, as far as the last merge could recognize
+   * them. Bookkeeping for replacements: a source replacing a predecessor
+   * under the same id inherits this record so its first merge can tell the
+   * predecessor's own output from entries that were edited afterwards
+   * (see {@link supersededModels}). Content comparison is a heuristic, not
+   * proof of authorship — see mergeProviderModels for what that does and
+   * does not guarantee.
+   */
+  publishedModels: Map<string, Model.Info>
+  /**
+   * Snapshot record inherited from the source this one replaced, spent by
+   * the first merge that runs after the swap. A live entry that still
+   * matches its snapshot is treated as the predecessor's own output and is
+   * re-rendered from the new source (or dropped when the new inventory no
+   * longer serves it); an entry that differs was changed afterwards — user
+   * curation or a host edit, the merge cannot tell which — and is kept
+   * untouched, with the id released. Undefined outside that first
+   * post-swap merge.
+   */
+  supersededModels: ReadonlyMap<string, Model.Info> | undefined
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -263,38 +287,175 @@ function numberOrDefault(value: unknown, fallback: number): number {
 }
 
 /**
+ * Host-side id stamps: the registry keys entries by provider and model id and
+ * the host fills these fields itself when reading entries back, so they are
+ * excluded from content identity.
+ */
+const EXCLUDED_IDENTITY_FIELDS: ReadonlySet<string> = new Set(['providerID', 'modelID'])
+
+/**
+ * Content comparison between a live registry entry and a recorded snapshot.
+ * The plugin renders identical facts into structurally identical entries,
+ * so a match is treated as an indication the entry is this plugin's own
+ * earlier output — a heuristic, not proof. A user-curated entry almost
+ * always differs (most visibly in `name`, but also e.g. `enabled` or
+ * `settings`); a curated entry that happens to exactly match the plugin's
+ * rendering would be treated as plugin output and could be replaced or
+ * removed. An unanticipated host edit of
+ * any other field can only cause a missed match — the entry is then kept
+ * rather than replaced, which fails safe: user content is never deleted on
+ * a missed match, but could be replaced or removed on a spurious one.
+ */
+function sameEntry(a: Model.Info, b: Model.Info): boolean {
+  const keys = new Set([
+    ...Object.keys(a as Record<string, unknown>),
+    ...Object.keys(b as Record<string, unknown>),
+  ])
+  for (const key of keys) {
+    if (EXCLUDED_IDENTITY_FIELDS.has(key)) continue
+    if (!deeplyEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) {
+      return false
+    }
+  }
+  return true
+}
+
+function deeplyEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) {
+    return false
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((item, index) => deeplyEqual(item, b[index]))
+  }
+  const recordA = a as Record<string, unknown>
+  const recordB = b as Record<string, unknown>
+  const keysA = Object.keys(recordA).sort()
+  const keysB = Object.keys(recordB).sort()
+  if (keysA.length !== keysB.length) return false
+  return keysA.every(
+    (key, index) => keysB[index] === key && deeplyEqual(recordA[key], recordB[key]),
+  )
+}
+
+/**
+ * Snapshot a registry entry for the provenance record. A deep clone, so a
+ * host (or a later transform) mutating the published entry in place cannot
+ * drag the record along with it — the recorded content stays what was
+ * actually published, and any such edit reads back as "no longer ours".
+ * Model entries are plain JSON-shaped schema data, so a JSON round-trip
+ * is a faithful clone.
+ */
+function recordEntry(model: Model.Info): Model.Info {
+  return JSON.parse(JSON.stringify(model)) as Model.Info
+}
+
+/**
  * Merge freshly discovered models into a provider's current model set.
  *
- * Previously-discovered ids owned by this plugin are replaced/removed so a
- * refresh reflects LiteLLM's current inventory; ids the user curated
- * themselves are never removed. Returns the merged list plus the set of
- * ids the plugin now owns.
+ * Previously-discovered ids owned by this plugin are kept/dropped so a
+ * refresh reflects LiteLLM's current inventory; distinguishable curated
+ * entries are preserved. Returns the merged list, the set of ids
+ * the plugin now owns, and the provenance record: snapshots of the last
+ * published entries for every owned id the merge could still recognize
+ * as the plugin's own output. Entries the merge kept but could no longer
+ * match (the live content changed after publication) stay owned per the
+ * steady-state semantics but drop out of the record, so a later
+ * replacement treats them as user-edited.
+ *
+ * A source that just replaced a predecessor carries the predecessor's
+ * provenance record in `superseded`. A live entry that matches its
+ * snapshot is treated as the predecessor's own stale output — the fresh
+ * discovery takes the id over (re-rendering it with the new provider's
+ * `providerName`/`modelNameTemplate`), or drops it when the new gateway
+ * no longer serves it. An entry that differs was changed after the
+ * predecessor published it — user curation or a host edit, which the
+ * merge cannot distinguish — and survives untouched, with the id
+ * released so later refreshes never remove it. The snapshot record is
+ * spent after this first post-swap merge, restoring the steady-state
+ * semantics for every later merge.
+ *
+ * Both recognitions rely on content comparison, a heuristic rather than
+ * proof of authorship. It errs toward keeping entries: deletion requires
+ * an owned id that still matches its last published snapshot, so user
+ * content is never deleted on a missed match. A curated entry that exactly
+ * matches the plugin's rendering can be replaced or removed.
  */
 function mergeProviderModels(
   configured: Iterable<Model.Info>,
   discovered: readonly Model.Info[],
   owned: ReadonlySet<string>,
-): { models: Model.Info[]; owned: Set<string> } {
+  superseded?: ReadonlyMap<string, Model.Info>,
+  published?: ReadonlyMap<string, Model.Info>,
+): { models: Model.Info[]; owned: Set<string>; published: Map<string, Model.Info> } {
   const discoveredIds = new Set(discovered.map((model) => model.id))
   const result = new Map<string, Model.Info>()
   const nextOwned = new Set<string>()
+  // Snapshots carried into this merge for owned ids: the predecessor's
+  // publications (first post-swap merge) or the plugin's own last published
+  // snapshots (steady state).
+  const carriedSnapshots = new Map<string, Model.Info>()
+  for (const [id, snapshot] of superseded ?? published ?? []) carriedSnapshots.set(id, snapshot)
 
   for (const model of configured) {
-    // Drop plugin-injected models that LiteLLM no longer returns; curated
-    // models are not in `owned`, so they always survive.
-    if (owned.has(model.id) && !discoveredIds.has(model.id)) continue
+    const snapshot = superseded?.get(model.id)
+    if (snapshot !== undefined) {
+      if (sameEntry(model, snapshot)) {
+        // Treated as the predecessor's own output: get out of the way; the
+        // discovery pass below takes the id over, or nothing does when the
+        // new gateway no longer serves it.
+        continue
+      }
+      // The entry differs from what the predecessor published, so it was
+      // changed afterwards - curated by the user or edited by the host,
+      // which this merge cannot tell apart. Keep it untouched and release
+      // the id from plugin ownership.
+      carriedSnapshots.delete(model.id)
+      result.set(model.id, model)
+      continue
+    }
+    if (!owned.has(model.id)) {
+      result.set(model.id, model)
+      continue
+    }
+    const carriedSnapshot = carriedSnapshots.get(model.id)
+    if (!discoveredIds.has(model.id)) {
+      // Only drop an undiscovered entry while it still matches the plugin's
+      // last published snapshot for the id. An owned id without a match
+      // (e.g. ownership inherited by a replacement while the user had
+      // already curated the id) has no evidence it is plugin output, so it
+      // is kept and released, never deleted.
+      if (carriedSnapshot !== undefined && sameEntry(model, carriedSnapshot)) continue
+      result.set(model.id, model)
+      continue
+    }
+    // Still discovered and owned: keep the live entry (steady-state
+    // semantics keep it even when discovery would render different content)
+    // and keep the carried snapshot so provenance survives content changes.
     result.set(model.id, model)
-    if (owned.has(model.id)) nextOwned.add(model.id)
+    nextOwned.add(model.id)
+    if (carriedSnapshot !== undefined) carriedSnapshots.set(model.id, carriedSnapshot)
   }
 
   for (const model of discovered) {
     if (!result.has(model.id)) {
       result.set(model.id, model)
       nextOwned.add(model.id)
+      carriedSnapshots.set(model.id, recordEntry(model))
     }
   }
 
-  return { models: [...result.values()], owned: nextOwned }
+  // Rolling provenance record: every owned id keeps the snapshot of the
+  // last entry the plugin published for it.
+  const nextPublished = new Map<string, Model.Info>()
+  for (const [id, model] of result) {
+    if (!nextOwned.has(id)) continue
+    const snapshot = carriedSnapshots.get(id)
+    if (snapshot !== undefined) nextPublished.set(id, snapshot)
+  }
+
+  return { models: [...result.values()], owned: nextOwned, published: nextPublished }
 }
 
 function runtimeSettings(source: ProviderSource): Record<string, unknown> {
@@ -508,6 +669,8 @@ async function makeProviderSource(
       compatibility,
     }),
     ownedModelIds: new Set<string>(),
+    publishedModels: new Map<string, Model.Info>(),
+    supersededModels: undefined,
   }
 }
 
@@ -732,6 +895,18 @@ async function reconcileProviderSources(
     if (existing && !existing.fromFallback && !existing.pendingPublication) continue
     const source = await makeProviderSource(context, provider, pluginOptions)
     if (!source) continue
+    // A source replacing this id's predecessor inherits its provenance
+    // record: the exact entries the predecessor published (or an inherited
+    // snapshot the predecessor itself had not spent yet). `providerName` and
+    // `modelNameTemplate` are baked into discovered names at discovery time,
+    // and ids alone cannot distinguish the plugin's stale rendering from an
+    // entry the user curated under the same id — so the successor carries the
+    // entries themselves, and its first merge replaces only entries that
+    // still match (see mergeProviderModels). For a fallback predecessor this
+    // is what re-renders its output with the configured provider's naming;
+    // for a pending configured one it can only affect entries the failed
+    // attempt actually published.
+    if (existing) source.supersededModels = existing.supersededModels ?? existing.publishedModels
     sources.set(source.id, source)
     changed.push(source)
   }
@@ -751,8 +926,9 @@ async function reconcileProviderSources(
  * options/config): a fallback only stands in until a real endpoint is
  * known, so the dialog's answers take over from it. Explicit option/env
  * baseURLs — and host-registered providers — keep winning and are never
- * replaced. Replaced sources' owned model ids carry over so models the
- * gateway no longer serves are dropped on the next merge, and sources
+ * replaced. Replaced sources carry their provenance record (the exact
+ * entries they published) so the successor's first merge re-renders its own
+ * stale output while preserving curated entries, and sources
  * replaced under a different id are dropped from `sources` and marked in
  * `staleProviderIds` for removal from the provider registry.
  */
@@ -769,7 +945,13 @@ async function publishConnectedSource(
     const existing = sources.get(source.id)
     if (existing && !(existing.fromFallback && !readString(existing.settings.baseURL))) return
     const previous = existing ?? replacing.find((candidate) => candidate.id === source.id)
-    if (previous) source.ownedModelIds = new Set(previous.ownedModelIds)
+    // Same carry as a configured provider replacing a fallback: the exact
+    // entries the predecessor published let the first merge replace only
+    // the predecessor's own output and preserve curated entries.
+    if (previous) {
+      source.ownedModelIds = new Set(previous.ownedModelIds)
+      source.supersededModels = previous.supersededModels ?? previous.publishedModels
+    }
     for (const previousSource of replacing) {
       if (previousSource.id === source.id) continue
       const mapped = sources.get(previousSource.id)
@@ -866,11 +1048,23 @@ const definition = Plugin.define({
             current.models.values(),
             source.models,
             source.ownedModelIds,
+            source.supersededModels,
+            source.publishedModels,
           )
           source.ownedModelIds = merged.owned
+          source.publishedModels = merged.published
+          // The one-shot replacement snapshot is spent: later merges on this
+          // source use the steady-state semantics alone.
+          source.supersededModels = undefined
           editor.models.set(source.id, merged.models)
         } else {
           source.ownedModelIds = new Set(source.models.map((model) => model.id))
+          source.publishedModels = new Map(
+            source.models.map((model) => [model.id, recordEntry(model)]),
+          )
+          // Nothing to replace under a brand-new provider id: any inherited
+          // snapshot is spent here too, so it never leaks into a later merge.
+          source.supersededModels = undefined
           editor.add({
             info: {
               ...Provider.Info.empty(Provider.ID.make(source.id)),
