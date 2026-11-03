@@ -619,7 +619,7 @@ describe('OpenCode 1 LiteLLM sign-in', () => {
     ).rejects.toThrow('LiteLLM sign-in expired; connect LiteLLM again')
   })
 
-  it('gives the Responses sibling the sign-in fetch and a placeholder key its runtime requires', async () => {
+  it('gives the templated Responses sibling the sign-in fetch and a placeholder key its runtime requires', async () => {
     writeAuthFile(pkceEntry())
     mockFetch((request) => {
       if (request.url.endsWith('/v1/models')) {
@@ -638,11 +638,22 @@ describe('OpenCode 1 LiteLLM sign-in', () => {
       return undefined
     })
     const hooks = await LiteLLMPlugin(createInput().input)
-    const config = createConfig({}) as { provider: Record<string, ProviderConfig> }
+    const config = createConfig({
+      modelNameTemplate: '{name} ({provider_id} / {provider_name})',
+    }) as { provider: Record<string, ProviderConfig> }
     await hooks.config!(config as never)
 
+    // The template resolves against the provider the user selects through:
+    // the unnamed base falls back to its id, the Responses sibling to the
+    // generated sibling identity.
+    expect(config.provider['litellm'].models?.['example-chat']).toMatchObject({
+      name: 'Example Chat (litellm / litellm)',
+    })
     const sibling = config.provider['litellm-responses']
     expect(Object.keys(sibling.models ?? {})).toEqual(['example-responses'])
+    expect(sibling.models?.['example-responses']).toMatchObject({
+      name: 'Example Responses (litellm-responses / litellm Responses)',
+    })
     expect(sibling.options?.baseURL).toBe(`${BASE}/v1`)
     // A placeholder the runtime package insists on; the fetch replaces it with the real token.
     const placeholder = sibling.options?.apiKey
