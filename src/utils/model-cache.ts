@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ModelNaming } from './format-model-name'
+import { normalizeModelDisplayName, type ModelNaming } from './format-model-name'
 
 /**
  * Facts about a discovered model's upstream that OpenCode 2 turns into
@@ -30,7 +30,7 @@ export interface ModelHints {
  * from older plugin versions are ignored rather than deserialized into
  * an incompatible structure.
  */
-const CACHE_VERSION = 6
+const CACHE_VERSION = 7
 
 /**
  * Maximum age of a cache entry before it's treated as a miss. Without a
@@ -56,6 +56,13 @@ interface ModelCacheFile {
    * no place in a provider-config entry (see `ModelHints`).
    */
   hints?: Record<string, ModelHints>
+  /**
+   * LiteLLM `model_info.display_name` values that were used for a model's
+   * display name. The templated name is already baked into `models`, but
+   * OpenCode 1's Responses sibling re-renders names with its own provider
+   * placeholders and needs the pre-template display name to do so.
+   */
+  displayNames?: Record<string, string>
 }
 
 /**
@@ -183,6 +190,17 @@ function normalizeResponsesIds(value: unknown): string[] {
   return value.filter((id): id is string => typeof id === 'string')
 }
 
+/** Keep only non-empty string entries of a cached `displayNames` map. */
+function normalizeDisplayNames(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out: Record<string, string> = {}
+  for (const [id, name] of Object.entries(value as Record<string, unknown>)) {
+    const normalized = normalizeModelDisplayName(name)
+    if (normalized !== undefined) out[id] = normalized
+  }
+  return out
+}
+
 /** Keep only well-formed entries of a cached `hints` map. */
 function normalizeHints(value: unknown): Record<string, ModelHints> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
@@ -220,10 +238,10 @@ export function readModelCache(
 }
 
 /**
- * Read the models, Responses-API model ids and model hints for a cache key
- * in one parse. Returns `null` under the same conditions as
- * {@link readModelCache} (missing/expired cache), so the three can't
- * disagree within a single lookup.
+ * Read the models, Responses-API model ids, model hints and LiteLLM display
+ * names for a cache key in one parse. Returns `null` under the same
+ * conditions as {@link readModelCache} (missing/expired cache), so the four
+ * can't disagree within a single lookup.
  */
 export function readModelCacheEntry(
   cacheKey: string,
@@ -231,6 +249,7 @@ export function readModelCacheEntry(
   models: Record<string, unknown>
   responsesIds: string[]
   hints: Record<string, ModelHints>
+  displayNames: Record<string, string>
 } | null {
   const parsed = readCacheFile(cacheKey)
   if (!parsed) return null
@@ -244,6 +263,7 @@ export function readModelCacheEntry(
     models: parsed.models,
     responsesIds: normalizeResponsesIds(parsed.responsesIds),
     hints: normalizeHints(parsed.hints),
+    displayNames: normalizeDisplayNames(parsed.displayNames),
   }
 }
 
@@ -278,6 +298,7 @@ export function writeModelCache(
   models: Record<string, unknown>,
   responsesIds: readonly string[] = [],
   hints: Record<string, ModelHints> = {},
+  displayNames: Record<string, string> = {},
 ): void {
   try {
     mkdirSync(cacheDir(), { recursive: true })
@@ -287,6 +308,7 @@ export function writeModelCache(
       models,
       responsesIds: [...responsesIds],
       hints,
+      displayNames,
     }
     // Write to a temp file and rename so concurrent OpenCode processes
     // never observe a partially-written JSON file (rename is atomic on

@@ -178,6 +178,25 @@ describe('reasoning-effort discovery', () => {
   })
 })
 
+describe('display_name discovery', () => {
+  it('indexes the display name under every alias /v1/models may use', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      data: [
+        {
+          model_name: 'company-alias',
+          model_info: { key: 'deployment-key', display_name: 'Company Model' },
+          litellm_params: { model: 'openai/gpt-4o' },
+        },
+      ],
+    })))
+
+    const discovered = await discoverLiteLLMModelInfo('https://proxy.example.com', 'test-key')
+    expect(discovered.get('company-alias')?.display_name).toBe('Company Model')
+    expect(discovered.get('deployment-key')?.display_name).toBe('Company Model')
+    expect(discovered.get('openai/gpt-4o')?.display_name).toBe('Company Model')
+  })
+})
+
 describe('restricted reasoning models', () => {
   // LiteLLM's Pro entries omit supports_low_reasoning_effort, and older
   // entries even report minimal=true despite the provider's restricted set.

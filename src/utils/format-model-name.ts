@@ -198,12 +198,50 @@ export function formatModelName(model: Pick<LiteLLMModel, 'id'>): string {
 }
 
 /**
+ * Normalise a LiteLLM `model_info.display_name` into a display name.
+ *
+ * Only a non-empty string counts. The value is trimmed so surrounding
+ * whitespace never reaches the picker; everything else (undefined, null,
+ * empty, whitespace-only, numbers, objects) is treated as "no display name"
+ * and lets the caller fall back to id formatting.
+ */
+export function normalizeModelDisplayName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+/**
+ * Resolve the display name for a discovered model before any provider
+ * template is applied.
+ *
+ * Precedence:
+ *   1. `formatModelNames: false` keeps the raw `/v1/models` id, as before.
+ *   2. A valid LiteLLM `model_info.display_name`.
+ *   3. The prettified id (`formatModelName`).
+ *
+ * `display_name` is display-only: callers keep using `model.id` for the
+ * model id, requests, routing and filtering.
+ */
+export function resolveModelDisplayName(
+  model: Pick<LiteLLMModel, 'id'>,
+  options: { formatModelNames?: boolean; displayName?: unknown } = {},
+): string {
+  if (options.formatModelNames === false) return model.id
+  return normalizeModelDisplayName(options.displayName) ?? formatModelName(model)
+}
+
+/**
  * The naming choices that decide how a discovered model is displayed. They
  * are baked into cached model entries, so the same object also feeds the
  * cache identity (see `buildCacheKey` in `model-cache.ts`).
  */
 export interface ModelNaming {
-  /** Prettify a model id into a display name; `false` keeps the raw id. */
+  /**
+   * Prettify a model id into a display name. A valid LiteLLM
+   * `model_info.display_name` takes precedence; `false` keeps the raw id and
+   * ignores the display name too.
+   */
   formatModelNames?: boolean
   /**
    * Template applied to every discovered model's display name. Unset (or

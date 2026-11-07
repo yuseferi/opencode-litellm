@@ -76,6 +76,7 @@ describe('model cache', () => {
       models: { chat: {}, responses: {} },
       responsesIds: ['responses'],
       hints: {},
+      displayNames: {},
     })
   })
 
@@ -90,6 +91,27 @@ describe('model cache', () => {
     expect(readModelCacheEntry('hints@http://x')?.hints).toEqual({
       a: { acceptsCacheControl: false, adaptiveThinking: false, thinkingAlwaysOn: false },
     })
+  })
+
+  it('round-trips display names and drops malformed ones', () => {
+    writeModelCache('display@http://x', { a: {}, b: {} }, [], {}, { a: ' A ', b: '' })
+    expect(readModelCacheEntry('display@http://x')?.displayNames).toEqual({ a: 'A' })
+    rewriteCacheFile('display@http://x', (parsed) => {
+      parsed.displayNames = { a: 1, b: null, c: ' C ', d: '   ' }
+    })
+    expect(readModelCacheEntry('display@http://x')?.displayNames).toEqual({ c: 'C' })
+  })
+
+  it('treats caches that predate display names as a miss', () => {
+    writeModelCache(KEY, { m: {} })
+    rewriteCacheFile(KEY, (parsed) => {
+      // v6 entries cannot carry display names, so a cache written before this
+      // feature must not keep serving the old formatted names.
+      parsed.version = 6
+    })
+    expect(readModelCacheEntry(KEY)).toBeNull()
+    expect(readModelCache(KEY)).toBeNull()
+    writeModelCache(KEY, { m: {} })
   })
 
   it('treats caches that predate the thinking hints as a miss', () => {
