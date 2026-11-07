@@ -10,7 +10,8 @@ import {
 import {
   applyModelNameTemplate,
   DEFAULT_MODEL_NAME_TEMPLATE,
-  formatModelName,
+  normalizeModelDisplayName,
+  resolveModelDisplayName,
   categorizeModel,
   type ModelNaming,
 } from '../utils/format-model-name'
@@ -297,10 +298,15 @@ const USD_PER_TOKEN_TO_PER_MILLION = 1_000_000
 
 /**
  * The display name a model gets before any provider template is applied —
- * the plugin's default formatting, or the raw `/v1/models` id.
+ * LiteLLM's `model_info.display_name` when valid, the plugin's default
+ * formatting, or the raw `/v1/models` id when formatting is disabled.
  */
-function baseDisplayName(model: { id: string }, formatModelNames: boolean): string {
-  return formatModelNames ? formatModelName(model) : model.id
+function baseDisplayName(
+  model: { id: string },
+  formatModelNames: boolean,
+  displayName?: unknown,
+): string {
+  return resolveModelDisplayName(model, { formatModelNames, displayName })
 }
 
 /**
@@ -310,9 +316,10 @@ function baseDisplayName(model: { id: string }, formatModelNames: boolean): stri
  * image, audio) — they can't be used as primary chat models and would
  * clutter the picker.
  *
- * Exported for tests: the `naming` options decide the display name — the
- * prettified id or the raw `/v1/models` id, optionally wrapped in the
- * provider's `modelNameTemplate`.
+ * Exported for tests: the display name comes from `info.display_name` when
+ * valid, otherwise the prettified id or the raw `/v1/models` id when
+ * formatting is disabled, optionally wrapped in the provider's
+ * `modelNameTemplate`.
  */
 export function toConfigModel(
   model: LiteLLMModel,
@@ -326,7 +333,11 @@ export function toConfigModel(
   const providerId = naming.providerId ?? ''
   const entry: Record<string, unknown> = {
     name: applyModelNameTemplate(naming.modelNameTemplate, {
-      name: baseDisplayName(model, naming.formatModelNames !== false),
+      name: baseDisplayName(
+        model,
+        naming.formatModelNames !== false,
+        info?.display_name,
+      ),
       id: model.id,
       providerId,
       // Without a configured display name the picker falls back to the id,
@@ -410,12 +421,16 @@ export function toConfigModel(
  * lists the subset that must be invoked through the OpenAI Responses API;
  * callers route those accordingly without inspecting each entry. `hints`
  * carries per-model upstream facts OpenCode 2 maps to `compatibility` and
- * `variants`.
+ * `variants`. `displayNames` records each model's valid
+ * `model_info.display_name` (when formatting is enabled), so a cached model
+ * can be re-rendered for the Responses sibling without losing it; an explicit
+ * `models.<id>.name` still wins at merge time.
  */
 export interface DiscoveredModels {
   models: Record<string, unknown>
   responsesIds: string[]
   hints: Record<string, ModelHints>
+  displayNames: Record<string, string>
 }
 
 /**
@@ -492,6 +507,7 @@ export async function discoverModels(
   const built: Record<string, unknown> = {}
   const responsesIds: string[] = []
   const hints: Record<string, ModelHints> = {}
+  const displayNames: Record<string, string> = {}
   let skipped = 0
   let wildcards = 0
   let filtered = 0
@@ -520,6 +536,13 @@ export async function discoverModels(
       continue
     }
     built[model.id] = entry
+    // Record the display name for every built model: an explicit
+    // models.<id>.name still wins at merge time, and with formatting
+    // disabled the raw id wins, so nothing is recorded.
+    if (naming.formatModelNames !== false) {
+      const displayName = normalizeModelDisplayName(info?.display_name)
+      if (displayName) displayNames[model.id] = displayName
+    }
     if (requiresResponsesAPI(enriched)) responsesIds.push(model.id)
     const params = info?.supported_openai_params
     hints[model.id] = {
@@ -558,7 +581,7 @@ export async function discoverModels(
       ')',
   )
 
-  return { models: built, responsesIds, hints }
+  return { models: built, responsesIds, hints, displayNames }
 }
 
 /**
@@ -674,7 +697,9 @@ function readHeaderMap(value: unknown): Record<string, string> {
  * sibling, so a template that uses `{provider_id}`/`{provider_name}` must
  * resolve to the provider the user actually selects. The entry in the cache
  * stays as discovered — OpenCode 2 reads the same cache with a single
- * provider — so this returns a copy instead of mutating it.
+ * provider — so this returns a copy instead of mutating it. `displayName` is
+ * the LiteLLM value recorded during discovery (when any), so re-rendering
+ * does not lose it.
  */
 function renameForProvider(
   entry: Record<string, unknown>,
@@ -682,12 +707,17 @@ function renameForProvider(
   naming: ModelNaming,
   providerId: string,
   providerName: string,
+  displayName?: string,
 ): Record<string, unknown> {
   if (naming.modelNameTemplate === undefined) return entry
   return {
     ...entry,
     name: applyModelNameTemplate(naming.modelNameTemplate, {
-      name: baseDisplayName({ id: modelId }, naming.formatModelNames !== false),
+      name: baseDisplayName(
+        { id: modelId },
+        naming.formatModelNames !== false,
+        displayName,
+      ),
       id: modelId,
       providerId,
       providerName,
@@ -708,6 +738,7 @@ function injectDiscoveredModels(
   baseModels: Record<string, unknown>,
   entries: Record<string, unknown>,
   responsesIds: readonly string[],
+  displayNames: Record<string, string>,
   baseURL: string,
   apiKey: string | undefined,
   customHeaders: Record<string, string> | undefined,
@@ -778,6 +809,7 @@ function injectDiscoveredModels(
         naming,
         responsesProviderId,
         siblingName,
+        displayNames[id],
       )
     }
     added.push(...mergeModels(siblingModels, responsesEntries))
@@ -822,7 +854,13 @@ async function backgroundRefresh(cacheKey: string): Promise<void> {
       DISCOVERY_TIMEOUT_MS,
     )
     if (discovered && Object.keys(discovered.models).length > 0) {
-      writeModelCache(cacheKey, discovered.models, discovered.responsesIds, discovered.hints)
+      writeModelCache(
+        cacheKey,
+        discovered.models,
+        discovered.responsesIds,
+        discovered.hints,
+        discovered.displayNames,
+      )
       log(
         'info',
         `[opencode-litellm] Background-refreshed model cache for ${ctx.baseURL} (${Object.keys(discovered.models).length} models)`,
@@ -1117,6 +1155,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
             models,
             cached.models,
             cached.responsesIds,
+            cached.displayNames,
             baseURL,
             runtimeKey,
             customHeaders,
@@ -1154,6 +1193,7 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
             models,
             discovered.models,
             discovered.responsesIds,
+            discovered.displayNames,
             baseURL,
             runtimeKey,
             customHeaders,
@@ -1161,7 +1201,13 @@ export const LiteLLMPlugin: Plugin = async (input: PluginInput) => {
             naming,
           )
           injectedModelIds.set(cacheKey, new Set(added))
-          writeModelCache(cacheKey, discovered.models, discovered.responsesIds, discovered.hints)
+          writeModelCache(
+            cacheKey,
+            discovered.models,
+            discovered.responsesIds,
+            discovered.hints,
+            discovered.displayNames,
+          )
         }
       }
     },
