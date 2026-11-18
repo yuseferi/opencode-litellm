@@ -1,3 +1,10 @@
+# [1.11.0](https://github.com/yuseferi/opencode-litellm/compare/v1.10.0...v1.11.0) (2026-11-18)
+
+
+### Features
+
+* prefer LiteLLM model_info.display_name for model names ([#56](https://github.com/yuseferi/opencode-litellm/issues/56)) ([33dfe79](https://github.com/yuseferi/opencode-litellm/commit/33dfe79757c0df86b057069d4a368b3ce2ab3b45))
+
 # [1.10.0](https://github.com/yuseferi/opencode-litellm/compare/v1.9.0...v1.10.0) (2026-11-03)
 
 
