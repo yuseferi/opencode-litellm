@@ -1067,6 +1067,177 @@ describe('OpenCode 2 plugin entrypoint', () => {
     await cleanup?.()
   })
 
+  it('uses LiteLLM display_name for OpenCode 2 model names without changing ids', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-display-name-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    const baseURL = 'http://127.0.0.1:44448'
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                model_name: 'deepseek-v4.1-flash',
+                model_info: {
+                  key: 'deepseek-v4.1-flash',
+                  mode: 'chat',
+                  display_name: '  DeepSeek V4.1 Flash Pro ',
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({ data: [{ id: 'deepseek-v4.1-flash', object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    const registered: Array<{
+      info: Record<string, unknown>
+      models: Array<Record<string, unknown>>
+    }> = []
+    const editor = {
+      list: () => [],
+      get: () => undefined,
+      add: (entry: { info: Record<string, unknown>; models: Array<Record<string, unknown>> }) => {
+        registered.push(entry)
+      },
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: { set: vi.fn(), update: vi.fn(), remove: vi.fn() },
+    }
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: {
+        baseURL: `${baseURL}/v1`,
+        apiKey: 'example-api-key',
+        modelNameTemplate: '{name} ({provider_name})',
+      },
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          transform(editor as never)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload: vi.fn(async () => {}),
+      },
+      event: { subscribe: () => (async function* () {})() },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+
+    expect(registered[0].models).toHaveLength(1)
+    expect(registered[0].models[0]).toMatchObject({
+      id: 'deepseek-v4.1-flash',
+      name: 'DeepSeek V4.1 Flash Pro (litellm)',
+    })
+    // The Responses-API routing and ids are untouched by the display name.
+    expect(registered[0].models[0]).not.toHaveProperty('package')
+
+    const cacheKey = buildCacheKey(
+      'litellm',
+      baseURL,
+      {},
+      {},
+      { modelNameTemplate: '{name} ({provider_name})', providerName: 'litellm' },
+      'example-api-key',
+    )
+    expect(readModelCacheEntry(cacheKey)?.displayNames).toEqual({
+      'deepseek-v4.1-flash': 'DeepSeek V4.1 Flash Pro',
+    })
+
+    await cleanup?.()
+  })
+
+  it('reloads with a changed display_name through the existing refresh', async () => {
+    cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-display-refresh-'))
+    process.env.XDG_CACHE_HOME = cacheDirectory
+    const baseURL = 'http://127.0.0.1:44449'
+    const cacheKey = buildCacheKey('litellm', baseURL, {}, {})
+    const now = Date.now()
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(now - 10 * 60 * 1000)
+    writeModelCache(cacheKey, { 'deepseek-v4.1-flash': { name: 'Old Name' } })
+    dateNow.mockRestore()
+
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                model_name: 'deepseek-v4.1-flash',
+                model_info: {
+                  key: 'deepseek-v4.1-flash',
+                  mode: 'chat',
+                  display_name: 'New Name',
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({ data: [{ id: 'deepseek-v4.1-flash', object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    const registeredModels: Array<Array<Record<string, unknown>>> = []
+    let providerTransform: ((editor: unknown) => void) | undefined
+    const editor = {
+      list: () => [],
+      get: () => undefined,
+      add: (entry: { models: Array<Record<string, unknown>> }) => {
+        registeredModels.push(entry.models)
+      },
+      update: vi.fn(),
+      remove: vi.fn(),
+      models: { set: vi.fn(), update: vi.fn(), remove: vi.fn() },
+    }
+    const reload = vi.fn(async () => {
+      providerTransform?.(editor)
+    })
+    const context = {
+      app: { name: 'OpenCode', version: '2.0.14', channel: 'stable' },
+      options: { baseURL: `${baseURL}/v1` },
+      provider: {
+        list: vi.fn(async () => ({ data: [] })),
+        transform: vi.fn(async (transform: (editor: unknown) => void) => {
+          providerTransform = transform
+          transform(editor)
+          return { dispose: vi.fn(async () => {}) }
+        }),
+        reload,
+      },
+      event: {
+        subscribe: () =>
+          (async function* () {
+            yield { type: 'session.created' }
+          })(),
+      },
+    } as unknown as Context
+
+    const cleanup = await plugin.setup(context)
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce())
+    expect(registeredModels[0].map((model) => [model.id, model.name])).toEqual([
+      ['deepseek-v4.1-flash', 'Old Name'],
+    ])
+    expect(registeredModels[1].map((model) => [model.id, model.name])).toEqual([
+      ['deepseek-v4.1-flash', 'New Name'],
+    ])
+    expect(readModelCacheEntry(cacheKey)?.displayNames).toEqual({
+      'deepseek-v4.1-flash': 'New Name',
+    })
+
+    await cleanup?.()
+  })
+
   it('reloads the provider registry when a background discovery changes models', async () => {
     cacheDirectory = mkdtempSync(join(tmpdir(), 'opencode-litellm-refresh-test-'))
     process.env.XDG_CACHE_HOME = cacheDirectory

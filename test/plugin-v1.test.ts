@@ -68,7 +68,9 @@ describe('OpenCode 1 config hook', () => {
     process.env.HOME = homeDirectory
   }
 
-  function mockProxy(models: Array<{ id: string; mode?: string; params?: string[] }>): void {
+  function mockProxy(
+    models: Array<{ id: string; mode?: string; params?: string[]; displayName?: unknown }>,
+  ): void {
     globalThis.fetch = vi.fn(async (input) => {
       const url = String(input)
       if (url.endsWith('/v1/model/info')) {
@@ -80,6 +82,9 @@ describe('OpenCode 1 config hook', () => {
                 key: model.id,
                 mode: model.mode ?? 'chat',
                 supported_openai_params: model.params,
+                ...(model.displayName !== undefined
+                  ? { display_name: model.displayName }
+                  : {}),
               },
             })),
           }),
@@ -260,6 +265,236 @@ describe('OpenCode 1 config hook', () => {
       config.provider['litellm-team-c-responses'].models?.['responses-model'],
     ).toMatchObject({
       name: 'Responses Model (litellm-team-c Responses)',
+    })
+  })
+
+  it('uses display_name for display only, leaving ids, routing and curated names alone', async () => {
+    useIsolatedState()
+    const baseURL = 'http://127.0.0.1:45563/v1'
+    mockProxy([
+      { id: 'chat-model', displayName: 'Chat Display' },
+      { id: 'responses-model', mode: 'responses', displayName: 'Responses Display' },
+      { id: 'curated-model', displayName: 'Should Not Win' },
+    ])
+
+    const plugin = await LiteLLMPlugin({
+      client: { app: { log: vi.fn(async () => {}) } },
+    } as never)
+    const config: OpenCodeConfig = {
+      provider: {
+        'litellm-team-a': {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'Team A',
+          options: { baseURL, apiKey: 'example-key' },
+          models: { 'curated-model': { name: 'Hand-picked' } },
+        },
+      },
+    }
+    await plugin.config!(config as never)
+
+    const models = config.provider['litellm-team-a'].models ?? {}
+    // Display names change, ids and routing do not.
+    expect(Object.keys(models).sort()).toEqual(['chat-model', 'curated-model'])
+    expect(models['chat-model']).toMatchObject({ name: 'Chat Display' })
+    // An explicit models.<id>.name still wins.
+    expect(models['curated-model']).toMatchObject({ name: 'Hand-picked' })
+
+    const sibling = config.provider['litellm-team-a-responses']
+    expect(Object.keys(sibling.models ?? {})).toEqual(['responses-model'])
+    expect(sibling.models?.['responses-model']).toMatchObject({ name: 'Responses Display' })
+
+    const cacheKey = buildCacheKey('litellm-team-a', 'http://127.0.0.1:45563', {}, {}, {}, 'example-key')
+    const cached = readModelCacheEntry(cacheKey)
+    expect(cached?.responsesIds).toEqual(['responses-model'])
+    // The upstream display name is cached even for a curated model: the
+    // explicit `models.<id>.name` wins at merge time, not at discovery.
+    expect(cached?.displayNames).toEqual({
+      'chat-model': 'Chat Display',
+      'responses-model': 'Responses Display',
+      'curated-model': 'Should Not Win',
+    })
+  })
+
+  it('keeps display_name when the Responses sibling re-renders the template', async () => {
+    useIsolatedState()
+    const baseURL = 'http://127.0.0.1:45564/v1'
+    mockProxy([
+      { id: 'deepseek-v4.1-flash', mode: 'responses', displayName: '  DeepSeek V4.1 Flash Pro ' },
+    ])
+
+    const plugin = await LiteLLMPlugin({
+      client: { app: { log: vi.fn(async () => {}) } },
+    } as never)
+    const config: OpenCodeConfig = {
+      provider: {
+        'litellm-team-a': {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'Team A',
+          options: {
+            baseURL,
+            apiKey: 'example-key',
+            modelNameTemplate: '{name} ({provider_id} / {provider_name})',
+          },
+          models: {},
+        },
+      },
+    }
+    await plugin.config!(config as never)
+
+    expect(
+      config.provider['litellm-team-a-responses'].models?.['deepseek-v4.1-flash'],
+    ).toMatchObject({
+      name: 'DeepSeek V4.1 Flash Pro (litellm-team-a-responses / Team A Responses)',
+    })
+  })
+
+  it('keeps a cached display_name when re-rendering the Responses sibling', async () => {
+    useIsolatedState()
+    const baseURL = 'http://127.0.0.1:45567/v1'
+    const cacheKey = buildCacheKey(
+      'litellm-team-a',
+      'http://127.0.0.1:45567',
+      {},
+      {},
+      {
+        modelNameTemplate: '{name} ({provider_id} / {provider_name})',
+        providerName: 'Team A',
+      },
+      'example-key',
+    )
+    writeModelCache(
+      cacheKey,
+      {
+        'deepseek-v4.1-flash': {
+          name: 'DeepSeek V4.1 Flash Pro (litellm-team-a / Team A)',
+        },
+      },
+      ['deepseek-v4.1-flash'],
+      {},
+      { 'deepseek-v4.1-flash': 'DeepSeek V4.1 Flash Pro' },
+    )
+    // A cache miss would go to the network; fail fast so the test is offline.
+    globalThis.fetch = vi.fn(
+      async () => new Response('unexpected network call', { status: 500 }),
+    )
+
+    const plugin = await LiteLLMPlugin({
+      client: { app: { log: vi.fn(async () => {}) } },
+    } as never)
+    const config: OpenCodeConfig = {
+      provider: {
+        'litellm-team-a': {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'Team A',
+          options: {
+            baseURL,
+            apiKey: 'example-key',
+            modelNameTemplate: '{name} ({provider_id} / {provider_name})',
+          },
+          models: {},
+        },
+      },
+    }
+    await plugin.config!(config as never)
+
+    expect(
+      config.provider['litellm-team-a-responses'].models?.['deepseek-v4.1-flash'],
+    ).toMatchObject({
+      name: 'DeepSeek V4.1 Flash Pro (litellm-team-a-responses / Team A Responses)',
+    })
+  })
+
+  it('does not record display names when formatting is disabled', async () => {
+    useIsolatedState()
+    const baseURL = 'http://127.0.0.1:45568/v1'
+    mockProxy([{ id: 'deepseek-v4.1-flash', displayName: 'DeepSeek V4.1 Flash Pro' }])
+
+    const plugin = await LiteLLMPlugin({
+      client: { app: { log: vi.fn(async () => {}) } },
+    } as never)
+    const config: OpenCodeConfig = {
+      provider: {
+        litellm: {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'LiteLLM (proxy)',
+          options: { baseURL, apiKey: 'example-key', formatModelNames: false },
+          models: {},
+        },
+      },
+    }
+    await plugin.config!(config as never)
+
+    expect(config.provider.litellm.models?.['deepseek-v4.1-flash']).toMatchObject({
+      name: 'deepseek-v4.1-flash',
+    })
+    const cacheKey = buildCacheKey(
+      'litellm',
+      'http://127.0.0.1:45568',
+      {},
+      {},
+      { formatModelNames: false },
+      'example-key',
+    )
+    expect(readModelCacheEntry(cacheKey)?.displayNames).toEqual({})
+  })
+
+  it('falls back to id formatting when /v1/model/info is unavailable', async () => {
+    useIsolatedState()
+    const baseURL = 'http://127.0.0.1:45565/v1'
+    globalThis.fetch = vi.fn(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/model/info')) {
+        return new Response('not available', { status: 404 })
+      }
+      return new Response(
+        JSON.stringify({ data: [{ id: 'claude-3-5-sonnet', object: 'model' }] }),
+        { status: 200 },
+      )
+    })
+
+    const config = await runConfigHook(baseURL)
+
+    expect(config.provider.litellm.models?.['claude-3-5-sonnet']).toMatchObject({
+      name: 'Claude 3.5 Sonnet',
+    })
+  })
+
+  it('refreshes a changed display_name through the existing background refresh', async () => {
+    useIsolatedState()
+    const baseURL = 'http://127.0.0.1:45566/v1'
+    mockProxy([{ id: 'deepseek-v4.1-flash', displayName: 'Old Name' }])
+    const input = { client: { app: { log: vi.fn(async () => {}) } } }
+    const plugin = await LiteLLMPlugin(input as never)
+    const config: OpenCodeConfig = {
+      provider: {
+        litellm: {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'LiteLLM (proxy)',
+          options: { baseURL, apiKey: 'example-key' },
+          models: {},
+        },
+      },
+    }
+    // Cold start, backdated so the next session is allowed to refresh.
+    const started = Date.now()
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(started - 10 * 60 * 1000)
+    await plugin.config!(config as never)
+    dateNow.mockRestore()
+
+    const cacheKey = buildCacheKey('litellm', 'http://127.0.0.1:45566', {}, {}, {}, 'example-key')
+    expect(readModelCacheEntry(cacheKey)?.models['deepseek-v4.1-flash']).toMatchObject({
+      name: 'Old Name',
+    })
+
+    mockProxy([{ id: 'deepseek-v4.1-flash', displayName: 'New Name' }])
+    await plugin.event!({ event: { type: 'session.created' } } as never)
+    await vi.waitFor(() =>
+      expect(readModelCacheEntry(cacheKey)?.models['deepseek-v4.1-flash']).toMatchObject({
+        name: 'New Name',
+      }),
+    )
+    expect(readModelCacheEntry(cacheKey)?.displayNames).toEqual({
+      'deepseek-v4.1-flash': 'New Name',
     })
   })
 

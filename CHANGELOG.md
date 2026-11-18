@@ -10,6 +10,7 @@
 ### Features
 
 * `modelNameTemplate` setting for discovered model display names, with `{name}`, `{id}`, `{provider_id}` and `{provider_name}` placeholders ([#52](https://github.com/yuseferi/opencode-litellm/issues/52))
+* prefer LiteLLM's `model_info.display_name` for discovered model display names, falling back to id formatting when unset or invalid
 
 # [1.9.0](https://github.com/yuseferi/opencode-litellm/compare/v1.8.1...v1.9.0) (2026-11-03)
 

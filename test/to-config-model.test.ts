@@ -58,6 +58,66 @@ describe('toConfigModel naming (formatModelNames)', () => {
   })
 })
 
+describe('toConfigModel naming (LiteLLM display_name)', () => {
+  const chat = model('deepseek-v4.1-flash')
+
+  it('prefers a valid display_name over id formatting', () => {
+    expect(toConfigModel(chat, { display_name: 'DeepSeek V4.1 Flash Pro' })?.name).toBe(
+      'DeepSeek V4.1 Flash Pro',
+    )
+    // Without a display_name the id is still prettified.
+    expect(toConfigModel(chat)?.name).toBe('DeepSeek V4.1 Flash')
+  })
+
+  it('trims surrounding whitespace from display_name', () => {
+    expect(toConfigModel(chat, { display_name: '  DeepSeek V4.1 Flash Pro  ' })?.name).toBe(
+      'DeepSeek V4.1 Flash Pro',
+    )
+  })
+
+  it('falls back to the formatted id when display_name is missing or invalid', () => {
+    expect(toConfigModel(chat)?.name).toBe('DeepSeek V4.1 Flash')
+    expect(toConfigModel(chat, { display_name: null })?.name).toBe('DeepSeek V4.1 Flash')
+    expect(toConfigModel(chat, { display_name: '' })?.name).toBe('DeepSeek V4.1 Flash')
+    expect(toConfigModel(chat, { display_name: '   ' })?.name).toBe('DeepSeek V4.1 Flash')
+    expect(
+      toConfigModel(chat, { display_name: 42 as unknown as string })?.name,
+    ).toBe('DeepSeek V4.1 Flash')
+    // The formatted fallback still collapses dotted versions.
+    expect(
+      toConfigModel(model('claude-opus-4-7'), { display_name: null })?.name,
+    ).toBe('Claude Opus 4.7')
+  })
+
+  it('keeps the raw id when formatting is disabled, even with a display_name', () => {
+    expect(
+      toConfigModel(chat, { display_name: 'DeepSeek V4.1 Flash Pro' }, { formatModelNames: false })
+        ?.name,
+    ).toBe('deepseek-v4.1-flash')
+  })
+
+  it('applies modelNameTemplate to the display_name', () => {
+    expect(
+      toConfigModel(chat, { display_name: 'DeepSeek V4.1 Flash Pro' }, {
+        providerId: 'litellm-team-a',
+        providerName: 'Team A',
+        modelNameTemplate: '{name} ({provider_name})',
+      })?.name,
+    ).toBe('DeepSeek V4.1 Flash Pro (Team A)')
+  })
+
+  it('keeps the raw id + template behavior when formatting is disabled', () => {
+    expect(
+      toConfigModel(chat, { display_name: 'DeepSeek V4.1 Flash Pro' }, {
+        formatModelNames: false,
+        providerId: 'litellm-team-a',
+        providerName: 'Team A',
+        modelNameTemplate: '{name} ({provider_name})',
+      })?.name,
+    ).toBe('deepseek-v4.1-flash (Team A)')
+  })
+})
+
 describe('toConfigModel naming (modelNameTemplate)', () => {
   const chat = model('anthropic/claude-3-5-sonnet')
   const naming = { providerId: 'litellm-team-a', providerName: 'Team A' }

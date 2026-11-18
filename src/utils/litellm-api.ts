@@ -102,10 +102,11 @@ export async function discoverLiteLLMModels(
 }
 
 /**
- * Fetch per-model metadata (`mode`, token limits, capability flags)
- * from `/v1/model/info`, keyed by model name. `/v1/models` omits these
- * fields for database-defined models, so classification (e.g. filtering
- * out embedding models) relies on this endpoint.
+ * Fetch per-model metadata (`mode`, token limits, capability flags and the
+ * optional `display_name`) from `/v1/model/info`, keyed by model name.
+ * `/v1/models` omits these fields for database-defined models, so
+ * classification (e.g. filtering out embedding models) relies on this
+ * endpoint.
  */
 export async function discoverLiteLLMModelInfo(
   baseURL: string = DEFAULT_LITELLM_URL,

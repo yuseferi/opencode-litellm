@@ -73,7 +73,7 @@ also shows how to configure a provider directly in `opencode.json`.
 | 🔍 **Auto-detection** | Probes `localhost:4000`, `:8000`, `:8080` and adopts the first responsive proxy. |
 | 📡 **Dynamic discovery** | Queries `/v1/models` so your OpenCode model picker always reflects your live `model_list`. |
 | ⚡ **Stale-while-revalidate** | A warm disk cache supplies models without a network request. New sessions trigger a background refresh, and cache entries expire after 7 days. |
-| 🏷️ **Smart formatting** | Turns `anthropic/claude-3-5-sonnet` into `Claude 3.5 Sonnet` in the picker — handles versions, sizes, quantizations, and brand-cased names like `gpt-4o`. Set `formatModelNames: false` to keep the raw LiteLLM ids instead. |
+| 🏷️ **Smart formatting** | Uses LiteLLM's `model_info.display_name` when set; otherwise turns `anthropic/claude-3-5-sonnet` into `Claude 3.5 Sonnet` in the picker — handles versions, sizes, quantizations, and brand-cased names like `gpt-4o`. Set `formatModelNames: false` to keep the raw LiteLLM ids instead. |
 | 🧠 **Modality-aware** | Enriches `/v1/models` entries with `/v1/model/info` (`mode`, token limits, capability flags) and hides embedding / image / audio models from the picker. Declares `temperature` support only for models whose `supported_openai_params` lists it, so OpenCode applies (and the user can set) a sampling temperature on exactly those models. |
 | 💵 **Real pricing** | Maps `input_cost_per_token` / `output_cost_per_token` (and cache read/write costs) from `/v1/model/info` into OpenCode's `cost` field, so the picker and `/cost` show what the proxy actually bills instead of `$0.00`. Models LiteLLM has no price for are left unpriced, not falsely marked free. |
 | 🧩 **Reasoning-effort variants** | When LiteLLM reports per-model effort support (`supports_low_reasoning_effort`, …), the plugin surfaces each level as a picker variant automatically. |
@@ -472,7 +472,7 @@ Model classification (tool-call badge, attachments, reasoning, input modalities)
 
 ### Keeping raw model ids in the picker (`formatModelNames`)
 
-By default the plugin prettifies each discovered id into a display name — `anthropic/claude-3-5-sonnet` shows up as `Claude 3.5 Sonnet`. If you'd rather see your LiteLLM `model_list` aliases verbatim (for example because your team refers to models by those exact names, or the formatter mangles an internal naming scheme), turn formatting off:
+By default the plugin uses the name LiteLLM reports in `model_info.display_name` when it is set, and otherwise prettifies the id — `anthropic/claude-3-5-sonnet` shows up as `Claude 3.5 Sonnet`. If you'd rather see your LiteLLM `model_list` aliases verbatim (for example because your team refers to models by those exact names, or the formatter mangles an internal naming scheme), turn formatting off:
 
 ```jsonc
 {
@@ -487,9 +487,11 @@ By default the plugin prettifies each discovered id into a display name — `ant
 }
 ```
 
-- The display name becomes the exact model id as returned by `/v1/models` (provider prefix, version suffixes and all). Nothing else changes — ids, capability flags, pricing and filtering behave exactly as before.
+- With formatting off, the display name becomes the exact model id as returned by `/v1/models` (provider prefix, version suffixes and all). Nothing else changes — ids, capability flags, pricing and filtering behave exactly as before.
+- With formatting on, a valid `model_info.display_name` replaces the formatted id. Empty, whitespace-only and non-string values are ignored.
+- An explicit `models.<id>.name` always wins; `formatModelNames: false` keeps the raw id even when `display_name` is set.
 - Only a boolean `false` disables formatting; omitting the option or setting anything else keeps the default.
-- Like the other options above, `formatModelNames` is part of the cache identity, so toggling it triggers a fresh discovery on the next start instead of serving previously cached names.
+- Like the other options above, `formatModelNames` is part of the cache identity, so toggling it triggers a fresh discovery on the next start instead of serving previously cached names. A changed `display_name` is picked up by the existing background refresh (on OpenCode 1 it appears after the following start).
 - To rename just a handful of models while keeping smart formatting for the rest, use the per-model `name` override described in [Overriding or curating individual models](#overriding-or-curating-individual-models-optional).
 
 ### Naming models per provider (`modelNameTemplate`)
@@ -523,13 +525,12 @@ Several providers can point at the same LiteLLM proxy with different keys. Every
 
 | Placeholder | Value |
 | --- | --- |
-| `{name}` | The display name the plugin would produce anyway — formatted, or the raw id when `formatModelNames: false` |
+| `{name}` | The display name the plugin resolved — LiteLLM's `display_name` when valid, otherwise the formatted id, or the raw id when `formatModelNames: false` |
 | `{id}` | The model id exactly as `/v1/models` returned it |
 | `{provider_id}` | The OpenCode provider id, for example `litellm-team-a` |
 | `{provider_name}` | The provider's configured `name`, or its id when no name is set |
 
 - The default is `{name}`, so omitting the setting changes nothing.
-- The template runs after name formatting, so it composes with `formatModelNames: false`.
 - An explicit `models.<id>.name` still wins and is never templated.
 - Unknown placeholders are left as written, and substitution is single-pass: a placeholder that appears inside a resolved value stays literal.
 - Non-string and empty values are ignored.
@@ -604,7 +605,7 @@ sequenceDiagram
 2. If `providers.litellm` exists, its `settings.baseURL` is used. Otherwise common ports are probed — that probe is the only health check (3 s fail-fast per port).
 3. With a configured `baseURL` the proxy is not contacted during startup unless the cache is cold; the discovery fetch itself fails fast if the proxy is unreachable.
 4. **Fast path:** if a fresh on-disk cache exists (≤ 7 days old), its models are registered synchronously — startup does not wait on network discovery.
-5. **Cold path:** `/v1/models` and `/v1/model/info` are fetched in parallel. Models are enriched with info metadata (`mode`, token limits, capability flags, per-token pricing — `/v1/models` omits these for database-defined models) and converted into OpenCode model entries with formatted `name`, inferred `modalities`, and `cost` (USD/1M tokens, converted from LiteLLM's USD/token). Non-chat models (embedding / image / audio) are excluded from the picker.
+5. **Cold path:** `/v1/models` and `/v1/model/info` are fetched in parallel. Models are enriched with info metadata (`mode`, token limits, capability flags, per-token pricing — `/v1/models` omits these for database-defined models) and converted into OpenCode model entries with a resolved `name`, inferred `modalities`, and `cost` (USD/1M tokens, converted from LiteLLM's USD/token). Non-chat models (embedding / image / audio) are excluded from the picker.
 6. Discovered models are added alongside user-defined models — never overwriting them — and persisted to the cache.
 7. On `session.created`, the cache is revalidated in the background (throttled to once per 5 minutes). V2 calls `provider.reload()` when the inventory changes; V1 surfaces refreshed entries on the next OpenCode start. The cold path is capped by a 20 s timeout.
 

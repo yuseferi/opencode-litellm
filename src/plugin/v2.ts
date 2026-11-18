@@ -626,7 +626,7 @@ async function makeProviderSource(
       entries = discovered.models
       responsesIds = discovered.responsesIds
       hints = discovered.hints
-      writeModelCache(cacheKey, entries, responsesIds, hints)
+      writeModelCache(cacheKey, entries, responsesIds, hints, discovered.displayNames)
     } else {
       entries = null
       responsesIds = []
@@ -746,7 +746,13 @@ async function refreshProviderSource(
         compatibility: source.compatibility,
       })
       if (JSON.stringify(models) === JSON.stringify(source.models)) {
-        writeModelCache(source.cacheKey, discovered.models, discovered.responsesIds, discovered.hints)
+        writeModelCache(
+          source.cacheKey,
+          discovered.models,
+          discovered.responsesIds,
+          discovered.hints,
+          discovered.displayNames,
+        )
         source.refreshRequired = false
         return
       }
@@ -760,7 +766,13 @@ async function refreshProviderSource(
         throw error
       }
 
-      writeModelCache(source.cacheKey, discovered.models, discovered.responsesIds, discovered.hints)
+      writeModelCache(
+        source.cacheKey,
+        discovered.models,
+        discovered.responsesIds,
+        discovered.hints,
+        discovered.displayNames,
+      )
       source.refreshRequired = false
       logInfo(
         `[opencode-litellm] Refreshed ${models.length} models for provider "${source.id}"; the provider registry was reloaded.`,

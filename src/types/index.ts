@@ -59,6 +59,12 @@ export interface LiteLLMModelInfo {
   db_model?: boolean
   /** Alias LiteLLM assigns to the model; mirrors the `/v1/models` id. */
   key?: string
+  /**
+   * Human-readable name configured on the deployment
+   * (`model_info.display_name`). Display-only: never used as the model id or
+   * in API requests. Absent or malformed values fall back to id formatting.
+   */
+  display_name?: string | null
   mode?: string
   max_tokens?: number
   max_input_tokens?: number
